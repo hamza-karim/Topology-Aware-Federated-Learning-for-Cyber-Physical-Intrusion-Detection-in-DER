@@ -1,0 +1,9 @@
+GLOBAL THRESHOLD PERCENTILE — USE IN ALL FL EXPERIMENTS
+==================================================
+percentile: 99.4
+threshold : 0.00459862
+auc       : 0.928041
+
+In FedAvg / FedProx / INTACT notebooks:
+  Load this percentile and apply to each zone training errors.
+  Do NOT re-run threshold sweep in FL notebooks.

@@ -1,0 +1,46 @@
+============================================================
+FINAL RESULTS — ZONE1 — Local LSTM Autoencoder
+Attack type: stealthy context-aware replay
+  Step 1: Statistical window selection [Shen & Qin 2024]
+  Step 2: Cross-fade boundary blending [Erba et al. 2020]
+  Injection: Full multi-variable [P, Q, |V|, theta]
+============================================================
+Dataset:
+  Train file    : zone1_train_noisy.csv
+  Test file     : zone1_test_stealthy.csv
+  Noise std     : 0.002
+  Blend steps   : 12 (60 min each side)
+  Window size   : 30 (LSTM input)
+  Attack window : 48 rows = 4 hours total
+  Attack events : 3
+
+Hyperparameters:
+  lstm_units_1: 32
+  lstm_units_2: 16
+  dropout_rate: 0.0
+  learning_rate: 0.009885254828670191
+  best_val_mse: 0.003589620580896735
+
+Optimal threshold: 0.006712 (99.4th percentile)
+
+Detection metrics:
+               precision    recall  f1-score   support
+
+       Normal       0.98      0.97      0.98      3843
+Replay Attack       0.44      0.52      0.47       159
+
+     accuracy                           0.95      4002
+    macro avg       0.71      0.74      0.73      4002
+ weighted avg       0.96      0.95      0.96      4002
+
+AUC-ROC : 0.8477
+============================================================
+Files saved:
+  zone1_train_noisy.csv
+  zone1_test_stealthy.csv
+  models/zone1_local_lstm.keras
+  models/zone1_scaler.pkl
+  models/zone1_threshold.npy
+  results/zone1_best_params.txt
+  results/zone1_threshold_sweep.txt
+  results/zone1_final_summary.txt

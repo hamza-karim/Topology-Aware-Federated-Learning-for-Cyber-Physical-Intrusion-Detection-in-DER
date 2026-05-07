@@ -1,0 +1,7 @@
+Optuna Best Params — centralized
+========================================
+lstm_units_1: 32
+lstm_units_2: 64
+dropout_rate: 0.0
+learning_rate: 0.005729946615705481
+best_val_mse: 0.0034844118636101484

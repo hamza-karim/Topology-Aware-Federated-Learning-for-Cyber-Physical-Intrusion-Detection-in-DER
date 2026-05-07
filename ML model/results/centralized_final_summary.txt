@@ -1,0 +1,43 @@
+============================================================
+FINAL RESULTS — CENTRALIZED LSTM Autoencoder
+One model on ALL 4 zones combined. Privacy-violating upper bound.
+============================================================
+Train file    : centralized_train_combined.csv
+Test file     : centralized_test_combined.csv
+Total features: 128  (all buses all zones)
+Noise std     : 0.002
+Blend steps   : 12
+Window size   : 30
+
+Hyperparameters (Optuna on combined data):
+  lstm_units_1: 32
+  lstm_units_2: 64
+  dropout_rate: 0.0
+  learning_rate: 0.005729946615705481
+  best_val_mse: 0.0034844118636101484
+
+Optimal threshold: 0.004599 (99.4th percentile)
+  Saved to results/global_threshold_percentile.txt for FL use.
+
+Detection metrics:
+               precision    recall  f1-score   support
+
+       Normal       0.97      0.94      0.95      3371
+Replay Attack       0.72      0.83      0.77       631
+
+     accuracy                           0.92      4002
+    macro avg       0.84      0.88      0.86      4002
+ weighted avg       0.93      0.92      0.92      4002
+
+AUC-ROC: 0.9280
+============================================================
+Files saved:
+  centralized_train_combined.csv
+  centralized_test_combined.csv
+  models/centralized_lstm.keras
+  models/centralized_scaler.pkl
+  models/centralized_threshold.npy
+  results/centralized_best_params.txt
+  results/centralized_threshold_sweep.txt
+  results/global_threshold_percentile.txt
+  results/centralized_final_summary.txt

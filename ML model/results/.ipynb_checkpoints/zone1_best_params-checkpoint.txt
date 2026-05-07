@@ -1,0 +1,7 @@
+Optuna Best Params — zone1
+========================================
+lstm_units_1: 32
+lstm_units_2: 16
+dropout_rate: 0.0
+learning_rate: 0.009885254828670191
+best_val_mse: 0.003589620580896735
