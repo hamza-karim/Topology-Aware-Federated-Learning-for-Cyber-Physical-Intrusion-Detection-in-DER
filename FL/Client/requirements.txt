@@ -1,0 +1,7 @@
+flwr==1.5.0
+tf-keras
+numpy<2
+pandas
+scikit-learn
+matplotlib
+joblib
