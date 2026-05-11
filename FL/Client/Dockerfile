@@ -23,4 +23,4 @@ RUN mkdir -p /app/src/data /app/src/models && \
 
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-CMD ["tail", "-f", "/dev/null"]
+CMD ["python3", "/app/src/Client.py"]

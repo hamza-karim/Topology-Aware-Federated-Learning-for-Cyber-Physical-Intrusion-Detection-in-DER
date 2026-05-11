@@ -1,9 +1,13 @@
-# Run on each client device:
-# docker exec -it <client_container> bash
-# cd /app/src && python3 Client.py
+# Automated (via start_clients.sh — set env vars, no prompts):
+#   docker run -d -e ZONE_ID=zone1 -e SERVER_ADDRESS=192.168.1.100:8080 ...
+#
+# Manual (interactive fallback):
+#   docker exec -it flwr-client-zone1 bash
+#   cd /app/src && python3 Client.py
 
 import os
 import re
+import sys
 import numpy as np
 import pandas as pd
 import joblib
@@ -45,28 +49,53 @@ def prompt(question, default=None, cast=str, choices=None):
         return value
 
 
+def env_or_prompt(env_key, question, default=None, cast=str, choices=None):
+    """Return env var if set and valid, else prompt (or use default if non-interactive)."""
+    raw = os.environ.get(env_key)
+    if raw is not None:
+        try:
+            val = cast(raw)
+            if choices and val not in choices:
+                raise ValueError(f"'{raw}' not in {choices}")
+            print(f"  {question}: {val}  (env ${env_key})", flush=True)
+            return val
+        except (ValueError, TypeError) as e:
+            print(f"  WARNING: invalid ${env_key}='{raw}' ({e}), ignoring.", flush=True)
+
+    # Non-interactive (detached container): use default or exit
+    if not sys.stdin.isatty():
+        if default is not None:
+            return default
+        sys.exit(f"ERROR: ${env_key} must be set when running non-interactively (no TTY).")
+
+    return prompt(question, default=default, cast=cast, choices=choices)
+
+
 def get_user_config():
-    print("=" * 50)
-    print("  FL Client Configuration")
-    print("=" * 50)
-    zone_id        = prompt("Zone ID", choices=list(ZONE_BUSES.keys()))
-    server_address = prompt("Server address (host:port)", default="127.0.0.1:8080")
-    data_path      = prompt("Data path", default="/app/src/data/centralized_train_combined.csv")
-    model_dir      = prompt("Model dir", default="/app/src/models")
-    local_epochs   = prompt("Local epochs per round", default=5, cast=int)
-    batch_size     = prompt("Batch size", default=32, cast=int)
-    window_size    = prompt("Window size", default=30, cast=int)
-    print("=" * 50)
-    print()
-    return {
-        'zone_id':        zone_id,
-        'server_address': server_address,
-        'data_path':      data_path,
-        'model_dir':      model_dir,
-        'local_epochs':   local_epochs,
-        'batch_size':     batch_size,
-        'window_size':    window_size,
+    print("=" * 50, flush=True)
+    print("  FL Client Configuration", flush=True)
+    print("=" * 50, flush=True)
+
+    cfg = {
+        'zone_id':        env_or_prompt('ZONE_ID',        'Zone ID',
+                                         choices=list(ZONE_BUSES.keys())),
+        'server_address': env_or_prompt('SERVER_ADDRESS', 'Server address (host:port)',
+                                         default='127.0.0.1:8080'),
+        'data_path':      env_or_prompt('DATA_PATH',      'Data path',
+                                         default='/app/src/data/centralized_train_combined.csv'),
+        'model_dir':      env_or_prompt('MODEL_DIR',      'Model dir',
+                                         default='/app/src/models'),
+        'local_epochs':   env_or_prompt('LOCAL_EPOCHS',   'Local epochs per round',
+                                         default=5, cast=int),
+        'batch_size':     env_or_prompt('BATCH_SIZE',     'Batch size',
+                                         default=32, cast=int),
+        'window_size':    env_or_prompt('WINDOW_SIZE',    'Window size',
+                                         default=30, cast=int),
     }
+
+    print("=" * 50, flush=True)
+    print(flush=True)
+    return cfg
 
 
 def get_zone_columns(columns, zone_id):
@@ -101,11 +130,11 @@ def build_model(window_size):
 
 class FlowerClient(fl.client.NumPyClient):
     def __init__(self, cfg, x_train):
-        self.zone_id      = cfg['zone_id']
-        self.batch_size   = cfg['batch_size']
-        self.local_epochs = cfg['local_epochs']
-        self.x_train      = x_train
-        self.model        = build_model(cfg['window_size'])
+        self.zone_id       = cfg['zone_id']
+        self.batch_size    = cfg['batch_size']
+        self.local_epochs  = cfg['local_epochs']
+        self.x_train       = x_train
+        self.model         = build_model(cfg['window_size'])
         self.current_round = 0
 
     def get_parameters(self, config):
@@ -161,7 +190,7 @@ def main():
     print(f"Loading data for {cfg['zone_id']}...", flush=True)
     x_train = load_data(cfg)
     print(f"Ready: {len(x_train)} windows, shape {x_train.shape}", flush=True)
-    print()
+    print(flush=True)
 
     fl.client.start_numpy_client(
         server_address=cfg['server_address'],

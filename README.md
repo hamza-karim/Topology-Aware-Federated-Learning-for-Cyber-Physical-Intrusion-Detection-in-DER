@@ -18,9 +18,10 @@ A privacy-preserving intrusion detection system (IDS) for smart grid Distributed
 10. [Step 1 — Build Docker Images](#step-1--build-docker-images)
 11. [Step 2 — Push to Docker Hub](#step-2--push-to-docker-hub)
 12. [Step 3 — Deploy on Edge Devices](#step-3--deploy-on-edge-devices)
-13. [Step 4 — Run FL Training](#step-4--run-fl-training)
-14. [Step 5 — Evaluate the Global Model](#step-5--evaluate-the-global-model)
-15. [Dependencies](#15-dependencies)
+13. [Step 4 — Configure start_clients.sh](#step-4--configure-start_clientssh-one-time-setup)
+14. [Step 5 — Run FL Training](#step-5--run-fl-training)
+15. [Step 6 — Evaluate the Global Model](#step-6--evaluate-the-global-model)
+16. [Dependencies](#16-dependencies)
 
 ---
 
@@ -273,16 +274,26 @@ docker push hamzakarim07/flwr_client_intact:latest
 
 ## Step 3 — Deploy on Edge Devices
 
-Pull and start containers on each Jetson. All containers use `CMD ["tail", "-f", "/dev/null"]` so they stay alive; you exec into them to run scripts.
+### Devices
 
-**Server Jetson:**
+| Device | IP | Role |
+|---|---|---|
+| AGX 04 (c2sragx04) | `10.226.44.86` | FL Server |
+| Nano 07 (c2srnano07) | `10.226.47.0` | Client — zone1 |
+| Nano 08 (c2srnano08) | `10.226.47.108` | Client — zone2 |
+| Nano 10 (hamzakarim) | `10.226.46.8` | Client — zone3 |
+| Nano 13 (hamzakarim) | `10.226.47.64` | Client — zone4 |
+
+### AGX 04 — pull and start server container
 
 ```bash
+ssh jetson@10.226.44.86
+
 docker pull hamzakarim07/flwr_server_intact:latest
 
 docker run -d \
-  --name fl_server \
-  --runtime nvidia \
+  --name flwr-server \
+  --runtime=nvidia \
   --gpus all \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -p 8080:8080 \
@@ -291,34 +302,40 @@ docker run -d \
   hamzakarim07/flwr_server_intact:latest
 ```
 
-**Each Client Jetson (×4):**
+### Each Nano — pull client image once
 
 ```bash
+# Run on each Nano (or SSH in)
 docker pull hamzakarim07/flwr_client_intact:latest
-
-docker run -d \
-  --name fl_client \
-  --runtime nvidia \
-  --gpus all \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -v ~/fl/models:/app/src/models \
-  hamzakarim07/flwr_client_intact:latest
 ```
 
-> The `-v ~/fl/models` mount persists saved scalers and weights on the host after the container stops.
+> Client containers are started automatically by `start_clients.sh` — no manual `docker run` needed on the Nanos.
 
 ---
 
-## Step 4 — Run FL Training
+## Step 4 — `start_clients.sh` (already configured)
 
-**Start the server first** (it waits until all clients connect before beginning round 1):
+`start_clients.sh` in the project root is pre-configured with all device IPs. No changes needed — just run it.
+
+If your SSH username differs from `jetson`, edit the one line at the top:
 
 ```bash
-docker exec -it fl_server bash
+SSH_USER="jetson"    # change if needed
+```
+
+---
+
+## Step 5 — Run FL Training
+
+### 5a. Start the server (SSH into AGX 04)
+
+```bash
+ssh jetson@10.226.44.86
+docker exec -it flwr-server bash
 cd /app/src && python3 Server.py
 ```
 
-You will be prompted:
+Fill in the prompts (press Enter to accept defaults):
 
 ```
 ==================================================
@@ -332,35 +349,39 @@ Model dir [/app/src/models]:
 ==================================================
 ```
 
-Press Enter to accept defaults. The server then waits for clients.
+The server is now waiting for all 4 Nanos to connect.
 
-**Start all 4 clients** (open 4 terminals, one SSH session per Jetson):
+### 5b. Start all 4 clients from your laptop (one command)
 
 ```bash
-docker exec -it fl_client bash
-cd /app/src && python3 Client.py
+bash start_clients.sh
 ```
 
-You will be prompted on each device:
+The script SSHes into all 4 Nanos in parallel and starts each client container with the correct zone and server address — no prompts:
 
 ```
-==================================================
-  FL Client Configuration
-==================================================
-Zone ID ['zone1', 'zone2', 'zone3', 'zone4']: zone2
-Server address (host:port) [127.0.0.1:8080]: 192.168.1.100:8080
-Data path [/app/src/data/centralized_train_combined.csv]:
-Model dir [/app/src/models]:
-Local epochs per round [5]:
-Batch size [32]:
-Window size [30]:
-==================================================
+========================================
+  Starting FL clients
+  Server : AGX 04 @ 10.226.44.86:8080
+========================================
+
+  ✓ Nano 07 (10.226.47.0)   → zone1
+  ✓ Nano 08 (10.226.47.108) → zone2
+  ✓ Nano 10 (10.226.46.8)   → zone3
+  ✓ Nano 13 (10.226.47.64)  → zone4
+
+========================================
+  All clients started — watch logs:
+========================================
+  ssh jetson@10.226.47.0 'docker logs -f flwr-client-zone1'
+  ...
 ```
 
-Assign a different `zone1`–`zone4` to each device. Use the **server Jetson's LAN IP** for the server address (`ip addr` to find it).
+Training starts automatically on the server as soon as all 4 clients connect.
 
-**Training output (server terminal):**
+### 5c. Watch training progress
 
+**Server terminal:**
 ```
 Round   1 | Clients: 4 | Aggregated Loss: 0.012345
 Round   2 | Clients: 4 | Aggregated Loss: 0.009876
@@ -368,32 +389,33 @@ Round   2 | Clients: 4 | Aggregated Loss: 0.009876
 Round  50 | Clients: 4 | Aggregated Loss: 0.003210
 ```
 
-**Training output (each client terminal):**
-
+**Any client log:**
+```bash
+ssh jetson@10.226.47.0 'docker logs -f flwr-client-zone1'
 ```
-Round 1 | Zone zone2 | Loss: 0.011234
-Round 2 | Zone zone2 | Loss: 0.008901
+```
+Round 1 | Zone zone1 | Loss: 0.011234
+Round 2 | Zone zone1 | Loss: 0.008901
 ...
 ```
 
-Per-round weights are saved automatically to `/app/src/models/` (mounted to `~/fl/models` on the host):
-
+Per-round weights are saved to `~/fl/models/` on the server host:
 ```
 fedavg_round_1_weights.npz
-fedavg_round_2_weights.npz
 ...
 fedavg_round_50_weights.npz
-fedavg_final_weights.npz       ← convenience copy of last round
+fedavg_final_weights.npz
 ```
 
 ---
 
-## Step 5 — Evaluate the Global Model
+## Step 6 — Evaluate the Global Model
 
 Run on the **server Jetson** after training completes:
 
 ```bash
-docker exec -it fl_server bash
+ssh jetson@10.226.44.86
+docker exec -it flwr-server bash
 cd /app/src && python3 test_server.py
 ```
 
