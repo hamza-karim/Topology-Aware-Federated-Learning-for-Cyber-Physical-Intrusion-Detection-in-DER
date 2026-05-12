@@ -1,0 +1,46 @@
+#!/bin/bash
+# fetch_fl_results.sh — copy FL results from AGX 04 to laptop
+# Overwrites existing files with the latest from the server.
+#
+# Usage: ./fetch_fl_results.sh
+
+SERVER_USER="jetson"
+SERVER_IP="10.226.44.86"
+REMOTE_RESULTS="~/fl/results"
+REMOTE_MODELS="~/fl/models"
+LOCAL_DIR="ML model/results/fl"
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+mkdir -p "$LOCAL_DIR"
+
+echo ""
+echo -e "${CYAN}========================================"
+echo "  Fetching FL results from AGX 04"
+echo "  ${SERVER_USER}@${SERVER_IP}"
+echo -e "========================================${NC}"
+echo ""
+
+# Copy all result files (errors, labels, figures, summaries)
+echo "  Copying results/..."
+scp -o BatchMode=yes -o ConnectTimeout=10 \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/fedavg_*" \
+    "$LOCAL_DIR/" && \
+    echo -e "${GREEN}  ✓ results copied${NC}" || \
+    echo -e "${RED}  ✗ results failed${NC}"
+
+# Copy training log
+echo "  Copying training log..."
+scp -o BatchMode=yes -o ConnectTimeout=10 \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/fedavg_training_log.csv" \
+    "$LOCAL_DIR/" && \
+    echo -e "${GREEN}  ✓ training log copied${NC}" || \
+    echo -e "${RED}  ✗ training log failed (run after training completes)${NC}"
+
+echo ""
+echo -e "${CYAN}Files in ${LOCAL_DIR}:${NC}"
+ls -lh "$LOCAL_DIR" 2>/dev/null | tail -n +2
+echo ""
