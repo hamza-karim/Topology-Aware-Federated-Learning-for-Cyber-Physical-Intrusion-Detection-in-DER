@@ -287,7 +287,7 @@ docker push hamzakarim07/flwr_client_intact:latest
 ### AGX 04 — pull and start server container
 
 ```bash
-ssh jetson@10.226.44.86
+ssh c2sragx04@10.226.44.86
 
 docker pull hamzakarim07/flwr_server_intact:latest
 
@@ -330,7 +330,7 @@ SSH_USER="jetson"    # change if needed
 ### 5a. Start the server (SSH into AGX 04)
 
 ```bash
-ssh jetson@10.226.44.86
+ssh c2sragx04@10.226.44.86
 docker exec -it flwr-server bash
 cd /app/src && python3 Server.py
 ```
@@ -414,7 +414,7 @@ fedavg_final_weights.npz
 Run on the **server Jetson** after training completes:
 
 ```bash
-ssh jetson@10.226.44.86
+ssh c2sragx04@10.226.44.86
 docker exec -it flwr-server bash
 cd /app/src && python3 test_server.py
 ```

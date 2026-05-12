@@ -27,10 +27,6 @@ LOCAL_EPOCHS = 5
 NUM_CLIENTS = 4
 BATCH_SIZE = 32
 OPTIMAL_PERCENTILE = 99.4
-THRESHOLD_PERCENTILES = [
-    95, 96, 97, 98, 99,
-    99.1, 99.2, 99.3, 99.4, 99.5, 99.6, 99.7, 99.8, 99.9,
-]
 
 ZONE_BUSES = {
     'zone1': range(1, 9),    # buses 1-8,   32 features
@@ -39,9 +35,10 @@ ZONE_BUSES = {
     'zone4': range(25, 33),  # buses 25-32, 32 features
 }
 
-DATA_PATH = '/app/src/data/centralized_test_combined.csv'
+TRAIN_PATH   = '/app/src/data/centralized_train_combined.csv'
+DATA_PATH    = '/app/src/data/centralized_test_combined.csv'
 WEIGHTS_PATH = '/app/src/models/fedavg_final_weights.npz'
-RESULTS_DIR = '/app/src/results'
+RESULTS_DIR  = '/app/src/results'
 
 
 def get_zone_columns(columns, zone_id):
@@ -152,7 +149,25 @@ def main():
     model = build_model()
     model = load_weights(model, WEIGHTS_PATH)
 
-    print("Running inference across all zones...", flush=True)
+    # ── Threshold from training data (all normal) ──────────────────
+    print("Computing threshold from training data...", flush=True)
+    train_df = pd.read_csv(TRAIN_PATH)
+    train_drop = [c for c in train_df.columns if 'timestamp' in c.lower() or c.lower() == 'time']
+    train_df = train_df.drop(columns=train_drop)
+    train_scaler = MinMaxScaler()
+    scaled_train = train_scaler.fit_transform(train_df.values.astype(np.float32))
+    train_cols = list(train_df.columns)
+
+    train_zone_errors = []
+    for zone_id in ['zone1', 'zone2', 'zone3', 'zone4']:
+        errs = zone_reconstruction_errors(model, scaled_train, train_cols, zone_id)
+        train_zone_errors.append(errs)
+    train_errors = np.mean(np.stack(train_zone_errors, axis=1), axis=1)
+    threshold = float(np.percentile(train_errors, OPTIMAL_PERCENTILE))
+    print(f"Threshold ({OPTIMAL_PERCENTILE}th pct of training errors): {threshold:.6f}", flush=True)
+
+    # ── Inference on test data ─────────────────────────────────────
+    print("Running inference on test data...", flush=True)
     zone_errors = []
     for zone_id in ['zone1', 'zone2', 'zone3', 'zone4']:
         errs = zone_reconstruction_errors(model, scaled_all, feature_cols, zone_id)
@@ -161,11 +176,6 @@ def main():
 
     # Average reconstruction error across all zones per window
     errors = np.mean(np.stack(zone_errors, axis=1), axis=1)
-
-    # Threshold on normal windows only
-    normal_errors = errors[window_labels == 0]
-    threshold = float(np.percentile(normal_errors, OPTIMAL_PERCENTILE))
-    print(f"Threshold ({OPTIMAL_PERCENTILE}th pct): {threshold:.6f}", flush=True)
 
     preds = (errors > threshold).astype(int)
 
@@ -183,30 +193,6 @@ def main():
 
     with open(os.path.join(RESULTS_DIR, 'fedavg_final_summary.txt'), 'w') as fh:
         fh.write(summary)
-
-    # Threshold sweep
-    sweep_header = (
-        f"{'Percentile':>12} {'Threshold':>12} {'Precision':>10}"
-        f" {'Recall':>10} {'F1':>10} {'FPR':>10}"
-    )
-    sweep_rows = [sweep_header, '-' * 66]
-    for pct in THRESHOLD_PERCENTILES:
-        thr = float(np.percentile(normal_errors, pct))
-        p = (errors > thr).astype(int)
-        tp = int(np.sum((p == 1) & (window_labels == 1)))
-        fp = int(np.sum((p == 1) & (window_labels == 0)))
-        fn = int(np.sum((p == 0) & (window_labels == 1)))
-        tn = int(np.sum((p == 0) & (window_labels == 0)))
-        pr_ = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        re_ = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1_ = 2 * pr_ * re_ / (pr_ + re_) if (pr_ + re_) > 0 else 0.0
-        fp_ = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-        sweep_rows.append(
-            f"{pct:>12.1f} {thr:>12.6f} {pr_:>10.4f} {re_:>10.4f} {f1_:>10.4f} {fp_:>10.4f}"
-        )
-
-    with open(os.path.join(RESULTS_DIR, 'fedavg_threshold_sweep.txt'), 'w') as fh:
-        fh.write('\n'.join(sweep_rows) + '\n')
 
     model.save(os.path.join(RESULTS_DIR, 'fedavg_global_model.keras'))
     np.save(os.path.join(RESULTS_DIR, 'fedavg_threshold.npy'), threshold)

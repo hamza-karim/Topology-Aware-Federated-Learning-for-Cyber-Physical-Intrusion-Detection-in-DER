@@ -1,10 +1,11 @@
 #!/bin/bash
 # fetch_fl_results.sh — copy FL results from AGX 04 to laptop
-# Overwrites existing files with the latest from the server.
 #
-# Usage: ./fetch_fl_results.sh
+# Usage:
+#   ./fetch_fl_results.sh          # fetch latest results
+#   ./fetch_fl_results.sh clean    # delete all previously fetched results
 
-SERVER_USER="jetson"
+SERVER_USER="c2sragx04"
 SERVER_IP="10.226.44.86"
 REMOTE_RESULTS="~/fl/results"
 REMOTE_MODELS="~/fl/models"
@@ -14,6 +15,23 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+if [ "$1" == "clean" ]; then
+    echo ""
+    echo -e "${CYAN}========================================"
+    echo "  Cleaning fetched FL results"
+    echo "  ${LOCAL_DIR}"
+    echo -e "========================================${NC}"
+    echo ""
+    if [ -d "$LOCAL_DIR" ]; then
+        rm -rf "$LOCAL_DIR"
+        echo -e "${GREEN}  ✓ ${LOCAL_DIR} removed${NC}"
+    else
+        echo "  Nothing to clean — ${LOCAL_DIR} does not exist"
+    fi
+    echo ""
+    exit 0
+fi
 
 mkdir -p "$LOCAL_DIR"
 

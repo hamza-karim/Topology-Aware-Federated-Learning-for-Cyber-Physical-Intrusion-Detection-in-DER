@@ -45,6 +45,7 @@ start_client() {
     local name="flwr-client-${zone}"
 
     $SSH ${user}@${host} "
+        docker pull ${IMAGE}
         docker rm -f ${name} 2>/dev/null
         docker run -d \
           --name ${name} \
