@@ -31,7 +31,7 @@ def get_user_config():
     print("  FL Server Configuration")
     print("=" * 50)
     port         = prompt("Port", default=8080)
-    rounds       = prompt("FL rounds", default=50)
+    rounds       = prompt("FL rounds", default=10)
     min_clients  = prompt("Min clients per round", default=4)
     local_epochs = prompt("Local epochs (sent to clients)", default=5)
     model_dir    = prompt("Model dir", default="/app/src/models", cast=str)

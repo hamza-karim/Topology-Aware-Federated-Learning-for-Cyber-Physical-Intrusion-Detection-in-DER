@@ -124,7 +124,7 @@ def build_model(window_size):
     x = LSTM(32, activation='tanh', return_sequences=True)(x)
     x = TimeDistributed(Dense(NUM_FEATURES))(x)
     model = Model(inp, x)
-    model.compile(optimizer=Adam(learning_rate=0.0011), loss='mse')
+    model.compile(optimizer=Adam(learning_rate=0.005730), loss='mse')
     return model
 
 

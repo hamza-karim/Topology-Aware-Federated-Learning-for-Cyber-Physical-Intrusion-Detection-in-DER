@@ -22,7 +22,7 @@ from tensorflow.keras.optimizers import Adam
 
 WINDOW_SIZE = 30
 NUM_FEATURES = 36
-FL_ROUNDS = 50
+FL_ROUNDS = 10
 LOCAL_EPOCHS = 5
 NUM_CLIENTS = 4
 BATCH_SIZE = 32
