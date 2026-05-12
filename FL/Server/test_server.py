@@ -10,7 +10,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
+from sklearn.metrics import (
+    roc_auc_score, roc_curve,
+    precision_recall_curve, average_precision_score,
+    precision_recall_fscore_support,
+)
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, Dense, RepeatVector, TimeDistributed
@@ -207,6 +211,12 @@ def main():
     model.save(os.path.join(RESULTS_DIR, 'fedavg_global_model.keras'))
     np.save(os.path.join(RESULTS_DIR, 'fedavg_threshold.npy'), threshold)
 
+    # Save raw scores for compare_models.py
+    np.save(os.path.join(RESULTS_DIR, 'fedavg_errors.npy'), errors)
+    np.save(os.path.join(RESULTS_DIR, 'fedavg_labels.npy'), window_labels)
+    np.save(os.path.join(RESULTS_DIR, 'fedavg_zone_errors.npy'),
+            np.stack(zone_errors, axis=1))
+
     # Figure: error distribution + error over time
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8))
 
@@ -244,6 +254,55 @@ def main():
 
     plt.tight_layout()
     fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_detection.png'), dpi=150)
+    plt.close(fig)
+
+    # Figure: ROC curve
+    fpr_v, tpr_v, _ = roc_curve(window_labels, errors)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.plot(fpr_v, tpr_v, color='#d7191c', linewidth=2, label=f'FL FedAvg (AUC={auc:.4f})')
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=0.8)
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title('ROC Curve — FL Global Model')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_roc.png'), dpi=150)
+    plt.close(fig)
+
+    # Figure: Precision-Recall curve
+    prec_v, rec_v, _ = precision_recall_curve(window_labels, errors)
+    ap = average_precision_score(window_labels, errors)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.plot(rec_v, prec_v, color='#d7191c', linewidth=2, label=f'FL FedAvg (AP={ap:.4f})')
+    ax.set_xlabel('Recall')
+    ax.set_ylabel('Precision')
+    ax.set_title('Precision-Recall Curve — FL Global Model')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_pr.png'), dpi=150)
+    plt.close(fig)
+
+    # Figure: per-zone error boxplot (normal vs attack)
+    zone_errors_arr = np.stack(zone_errors, axis=1)
+    zone_names = ['Zone 1', 'Zone 2', 'Zone 3', 'Zone 4']
+    normal_data = [zone_errors_arr[window_labels == 0, i] for i in range(4)]
+    attack_data = [zone_errors_arr[window_labels == 1, i] for i in range(4)]
+    positions_n = np.arange(1, 9, 2, dtype=float)
+    positions_a = np.arange(2, 10, 2, dtype=float)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    bp1 = ax.boxplot(normal_data, positions=positions_n, widths=0.7,
+                     patch_artist=True, boxprops=dict(facecolor='steelblue', alpha=0.6))
+    bp2 = ax.boxplot(attack_data, positions=positions_a, widths=0.7,
+                     patch_artist=True, boxprops=dict(facecolor='tomato', alpha=0.6))
+    ax.set_xticks((positions_n + positions_a) / 2)
+    ax.set_xticklabels(zone_names)
+    ax.set_ylabel('Reconstruction Error (MSE)')
+    ax.set_title('Per-Zone Reconstruction Error — FL Global Model')
+    ax.legend([bp1['boxes'][0], bp2['boxes'][0]], ['Normal', 'Attack'])
+    fig.tight_layout()
+    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_zone_errors.png'), dpi=150)
     plt.close(fig)
 
     print(f"All results saved to {RESULTS_DIR}", flush=True)

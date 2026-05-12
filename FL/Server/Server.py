@@ -3,6 +3,7 @@
 # cd /app/src && python3 Server.py
 
 import os
+import csv
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -50,6 +51,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
         super().__init__(**kwargs)
         self.model_dir    = model_dir
         self.local_epochs = local_epochs
+        self.round_losses = []
 
     def aggregate_fit(
         self,
@@ -76,6 +78,7 @@ class SaveModelStrategy(fl.server.strategy.FedAvg):
                 sum(r.metrics.get('loss', 0.0) * r.num_examples for _, r in results)
                 / total_examples if total_examples > 0 else 0.0
             )
+            self.round_losses.append((server_round, avg_loss))
             print(f"Round {server_round:>3} | Clients: {len(results)} | "
                   f"Aggregated Loss: {avg_loss:.6f}", flush=True)
 
@@ -104,6 +107,15 @@ def main():
         config=fl.server.ServerConfig(num_rounds=cfg['rounds']),
         strategy=strategy,
     )
+
+    if strategy.round_losses:
+        os.makedirs(cfg['model_dir'], exist_ok=True)
+        log_path = os.path.join(cfg['model_dir'], 'fedavg_training_log.csv')
+        with open(log_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['round', 'loss'])
+            writer.writerows(strategy.round_losses)
+        print(f"Training log saved to {log_path}", flush=True)
 
 
 if __name__ == '__main__':
