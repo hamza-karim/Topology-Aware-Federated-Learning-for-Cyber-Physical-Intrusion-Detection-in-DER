@@ -1,9 +1,13 @@
 # Run on server device AFTER training is complete:
 # docker exec -it <server_container> bash
 # cd /app/src && python test_server.py
+#
+# Override prefix detection with env var if needed:
+#   PREFIX=fedprox_0.001 python3 test_server.py
 
 import os
 import re
+import json
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -22,8 +26,6 @@ from tensorflow.keras.optimizers import Adam
 
 WINDOW_SIZE = 30
 NUM_FEATURES = 36
-FL_ROUNDS = 10
-LOCAL_EPOCHS = 5
 NUM_CLIENTS = 4
 BATCH_SIZE = 32
 OPTIMAL_PERCENTILE = 99.4
@@ -35,10 +37,42 @@ ZONE_BUSES = {
     'zone4': range(25, 33),  # buses 25-32, 32 features
 }
 
-TRAIN_PATH   = '/app/src/data/centralized_train_combined.csv'
-DATA_PATH    = '/app/src/data/centralized_test_combined.csv'
-WEIGHTS_PATH = '/app/src/models/fedavg_final_weights.npz'
-RESULTS_DIR  = '/app/src/results'
+TRAIN_PATH  = '/app/src/data/centralized_train_combined.csv'
+DATA_PATH   = '/app/src/data/centralized_test_combined.csv'
+MODELS_DIR  = '/app/src/models'
+RESULTS_DIR = '/app/src/results'
+
+
+def detect_prefix():
+    """Return run prefix from PREFIX env var, or auto-detect from most recently written run_config.
+    Examples: 'fedavg', 'fedprox_0.01', 'fedprox_0.001'
+    """
+    env = os.environ.get('PREFIX', '').strip()
+    if env:
+        return env
+
+    import glob
+    configs = glob.glob(os.path.join(MODELS_DIR, '*_run_config.json'))
+    if not configs:
+        return 'fedavg'
+    newest = max(configs, key=os.path.getmtime)
+    return os.path.basename(newest).replace('_run_config.json', '')
+
+
+def prefix_to_label(prefix):
+    if prefix == 'fedavg':
+        return 'FL FedAvg'
+    if prefix == 'fedprox':
+        return 'FL FedProx (mu=0.01)'  # legacy prefix before mu was included
+    if prefix.startswith('fedprox_'):
+        mu = prefix.replace('fedprox_', '')
+        return f'FL FedProx (mu={mu})'
+    if prefix == 'fedadam':
+        return 'FL FedAdam'
+    if prefix.startswith('fedadam_'):
+        eta = prefix.replace('fedadam_', '')
+        return f'FL FedAdam (eta={eta})'
+    return prefix.upper()
 
 
 def get_zone_columns(columns, zone_id):
@@ -94,24 +128,20 @@ def zone_reconstruction_errors(model, scaled_all, feature_cols, zone_id):
     return np.mean(np.mean(np.square(windows - pred), axis=2), axis=1)
 
 
-def format_summary(threshold, prec, rec, f1, support, auc):
+def format_summary(label, threshold, prec, rec, f1, support, auc, fl_rounds, local_epochs):
     sep = '=' * 60
-    w = 14  # name column width: len("Replay Attack") + 1
-    col = 9
-    header = f"{'':>{w}} {'precision':>{col}} {'recall':>{col}} {'f1-score':>{col}} {'support':>{col}}"
-    normal_row = (
-        f"{'Normal':>{w}} {prec[0]:>{col}.2f} {rec[0]:>{col}.2f}"
-        f" {f1[0]:>{col}.2f} {int(support[0]):>{col}d}"
-    )
-    attack_row = (
-        f"{'Replay Attack':>{w}} {prec[1]:>{col}.2f} {rec[1]:>{col}.2f}"
-        f" {f1[1]:>{col}.2f} {int(support[1]):>{col}d}"
-    )
+    w, col = 14, 9
+    header = (f"{'':>{w}} {'precision':>{col}} {'recall':>{col}} "
+              f"{'f1-score':>{col}} {'support':>{col}}")
+    normal_row = (f"{'Normal':>{w}} {prec[0]:>{col}.2f} {rec[0]:>{col}.2f}"
+                  f" {f1[0]:>{col}.2f} {int(support[0]):>{col}d}")
+    attack_row = (f"{'Replay Attack':>{w}} {prec[1]:>{col}.2f} {rec[1]:>{col}.2f}"
+                  f" {f1[1]:>{col}.2f} {int(support[1]):>{col}d}")
     return (
         f"{sep}\n"
-        f"FINAL RESULTS — FEDAVG — FL LSTM Autoencoder\n"
-        f"FL rounds     : {FL_ROUNDS}\n"
-        f"Local epochs  : {LOCAL_EPOCHS}\n"
+        f"FINAL RESULTS — {label.upper()} — FL LSTM Autoencoder\n"
+        f"FL rounds     : {fl_rounds}\n"
+        f"Local epochs  : {local_epochs}\n"
         f"Num clients   : {NUM_CLIENTS}\n"
         f"{sep}\n"
         f"Optimal threshold: {threshold:.6f} ({OPTIMAL_PERCENTILE}th percentile)\n"
@@ -127,17 +157,38 @@ def format_summary(threshold, prec, rec, f1, support, auc):
 def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
+    prefix = detect_prefix()
+    label  = prefix_to_label(prefix)
+    print(f"Prefix: {prefix}  ({label})", flush=True)
+
+    # Read run config (rounds, epochs, mu)
+    fl_rounds    = 10
+    local_epochs = 5
+    proximal_mu  = 0.0
+    run_cfg_path = os.path.join(MODELS_DIR, f'{prefix}_run_config.json')
+    log_path     = os.path.join(MODELS_DIR, f'{prefix}_training_log.csv')
+    weights_path = os.path.join(MODELS_DIR, f'{prefix}_final_weights.npz')
+
+    if os.path.exists(run_cfg_path):
+        with open(run_cfg_path) as f:
+            run_cfg = json.load(f)
+        fl_rounds    = run_cfg.get('fl_rounds', fl_rounds)
+        local_epochs = run_cfg.get('local_epochs', local_epochs)
+        proximal_mu  = run_cfg.get('proximal_mu', proximal_mu)
+    elif os.path.exists(log_path):
+        fl_rounds = len(pd.read_csv(log_path))
+
     print("Loading test data...", flush=True)
     df = pd.read_csv(DATA_PATH)
     raw_labels = df['attack_label'].values
     drop_cols = ['attack_label'] + [
         c for c in df.columns if 'timestamp' in c.lower() or c.lower() == 'time'
     ]
-    feature_df = df.drop(columns=drop_cols)
+    feature_df   = df.drop(columns=drop_cols)
     feature_cols = list(feature_df.columns)
     print(f"Test rows: {len(feature_df)}, Features: {len(feature_cols)}", flush=True)
 
-    scaler = MinMaxScaler()
+    scaler    = MinMaxScaler()
     scaled_all = scaler.fit_transform(feature_df.values.astype(np.float32))
 
     window_labels = window_labels_from_rows(raw_labels)
@@ -147,16 +198,16 @@ def main():
 
     print("Building model and loading weights...", flush=True)
     model = build_model()
-    model = load_weights(model, WEIGHTS_PATH)
+    model = load_weights(model, weights_path)
 
     # ── Threshold from training data (all normal) ──────────────────
     print("Computing threshold from training data...", flush=True)
     train_df = pd.read_csv(TRAIN_PATH)
     train_drop = [c for c in train_df.columns if 'timestamp' in c.lower() or c.lower() == 'time']
-    train_df = train_df.drop(columns=train_drop)
+    train_df   = train_df.drop(columns=train_drop)
     train_scaler = MinMaxScaler()
     scaled_train = train_scaler.fit_transform(train_df.values.astype(np.float32))
-    train_cols = list(train_df.columns)
+    train_cols   = list(train_df.columns)
 
     train_zone_errors = []
     for zone_id in ['zone1', 'zone2', 'zone3', 'zone4']:
@@ -174,103 +225,89 @@ def main():
         zone_errors.append(errs)
         print(f"  {zone_id}: mean error {errs.mean():.6f}", flush=True)
 
-    # Average reconstruction error across all zones per window
     errors = np.mean(np.stack(zone_errors, axis=1), axis=1)
-
-    preds = (errors > threshold).astype(int)
+    preds  = (errors > threshold).astype(int)
 
     prec, rec, f1, support = precision_recall_fscore_support(
         window_labels, preds, labels=[0, 1]
     )
-    fpr = float(
-        np.sum((preds == 1) & (window_labels == 0)) / np.sum(window_labels == 0)
-    )
+    fpr = float(np.sum((preds == 1) & (window_labels == 0)) / np.sum(window_labels == 0))
     auc = float(roc_auc_score(window_labels, errors))
 
-    summary = format_summary(threshold, prec, rec, f1, support, auc)
+    summary = format_summary(label, threshold, prec, rec, f1,
+                             support, auc, fl_rounds, local_epochs)
     print(summary, flush=True)
     print(f"FPR: {fpr:.4f}", flush=True)
 
-    with open(os.path.join(RESULTS_DIR, 'fedavg_final_summary.txt'), 'w') as fh:
+    with open(os.path.join(RESULTS_DIR, f'{prefix}_final_summary.txt'), 'w') as fh:
         fh.write(summary)
 
-    model.save(os.path.join(RESULTS_DIR, 'fedavg_global_model.keras'))
-    np.save(os.path.join(RESULTS_DIR, 'fedavg_threshold.npy'), threshold)
-
-    # Save raw scores for compare_models.py
-    np.save(os.path.join(RESULTS_DIR, 'fedavg_errors.npy'), errors)
-    np.save(os.path.join(RESULTS_DIR, 'fedavg_labels.npy'), window_labels)
-    np.save(os.path.join(RESULTS_DIR, 'fedavg_zone_errors.npy'),
+    model.save(os.path.join(RESULTS_DIR, f'{prefix}_global_model.keras'))
+    np.save(os.path.join(RESULTS_DIR, f'{prefix}_threshold.npy'), threshold)
+    np.save(os.path.join(RESULTS_DIR, f'{prefix}_errors.npy'), errors)
+    np.save(os.path.join(RESULTS_DIR, f'{prefix}_labels.npy'), window_labels)
+    np.save(os.path.join(RESULTS_DIR, f'{prefix}_zone_errors.npy'),
             np.stack(zone_errors, axis=1))
 
     # Figure: error distribution + error over time
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8))
+    color = '#d7191c' if prefix == 'fedavg' else '#ff7f00'
 
-    ax1.hist(
-        errors[window_labels == 0], bins=100, alpha=0.6,
-        color='steelblue', label='Normal', density=True,
-    )
-    ax1.hist(
-        errors[window_labels == 1], bins=100, alpha=0.6,
-        color='tomato', label='Replay Attack', density=True,
-    )
-    ax1.axvline(
-        threshold, color='black', linestyle='--',
-        label=f'Threshold ({OPTIMAL_PERCENTILE}th pct)',
-    )
+    ax1.hist(errors[window_labels == 0], bins=100, alpha=0.6,
+             color='steelblue', label='Normal', density=True)
+    ax1.hist(errors[window_labels == 1], bins=100, alpha=0.6,
+             color='tomato', label='Replay Attack', density=True)
+    ax1.axvline(threshold, color='black', linestyle='--',
+                label=f'Threshold ({OPTIMAL_PERCENTILE}th pct)')
     ax1.set_xlabel('Reconstruction Error (MSE)')
     ax1.set_ylabel('Density')
-    ax1.set_title('Reconstruction Error Distribution')
+    ax1.set_title(f'Reconstruction Error Distribution — {label}')
     ax1.legend()
 
     idx = np.arange(len(errors))
-    ax2.plot(
-        idx[window_labels == 0], errors[window_labels == 0],
-        '.', markersize=1, color='steelblue', label='Normal',
-    )
-    ax2.plot(
-        idx[window_labels == 1], errors[window_labels == 1],
-        '.', markersize=1, color='tomato', label='Replay Attack',
-    )
+    ax2.plot(idx[window_labels == 0], errors[window_labels == 0],
+             '.', markersize=1, color='steelblue', label='Normal')
+    ax2.plot(idx[window_labels == 1], errors[window_labels == 1],
+             '.', markersize=1, color='tomato', label='Replay Attack')
     ax2.axhline(threshold, color='black', linestyle='--', label='Threshold')
     ax2.set_xlabel('Window Index')
     ax2.set_ylabel('Reconstruction Error (MSE)')
-    ax2.set_title('Reconstruction Error Over Time')
+    ax2.set_title(f'Reconstruction Error Over Time — {label}')
     ax2.legend()
 
     plt.tight_layout()
-    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_detection.png'), dpi=150)
+    fig.savefig(os.path.join(RESULTS_DIR, f'{prefix}_fig_detection.png'), dpi=150)
     plt.close(fig)
 
     # Figure: ROC curve
     fpr_v, tpr_v, _ = roc_curve(window_labels, errors)
     fig, ax = plt.subplots(figsize=(7, 6))
-    ax.plot(fpr_v, tpr_v, color='#d7191c', linewidth=2, label=f'FL FedAvg (AUC={auc:.4f})')
+    ax.plot(fpr_v, tpr_v, color=color, linewidth=2, label=f'{label} (AUC={auc:.4f})')
     ax.plot([0, 1], [0, 1], 'k--', linewidth=0.8)
     ax.set_xlabel('False Positive Rate')
     ax.set_ylabel('True Positive Rate')
-    ax.set_title('ROC Curve — FL Global Model')
+    ax.set_title(f'ROC Curve — {label}')
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_roc.png'), dpi=150)
+    fig.savefig(os.path.join(RESULTS_DIR, f'{prefix}_fig_roc.png'), dpi=150)
     plt.close(fig)
 
     # Figure: Precision-Recall curve
     prec_v, rec_v, _ = precision_recall_curve(window_labels, errors)
     ap = average_precision_score(window_labels, errors)
     fig, ax = plt.subplots(figsize=(7, 6))
-    ax.plot(rec_v, prec_v, color='#d7191c', linewidth=2, label=f'FL FedAvg (AP={ap:.4f})')
+    ax.plot(rec_v, prec_v, color=color, linewidth=2, label=f'{label} (AP={ap:.4f})')
     ax.set_xlabel('Recall')
     ax.set_ylabel('Precision')
-    ax.set_title('Precision-Recall Curve — FL Global Model')
+    ax.set_title(f'Precision-Recall Curve — {label}')
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_pr.png'), dpi=150)
+    fig.savefig(os.path.join(RESULTS_DIR, f'{prefix}_fig_pr.png'), dpi=150)
     plt.close(fig)
 
-    # Figure: per-zone error boxplot (normal vs attack)
+    # Figure: per-zone error boxplot
     zone_errors_arr = np.stack(zone_errors, axis=1)
     zone_names = ['Zone 1', 'Zone 2', 'Zone 3', 'Zone 4']
     normal_data = [zone_errors_arr[window_labels == 0, i] for i in range(4)]
@@ -285,10 +322,10 @@ def main():
     ax.set_xticks((positions_n + positions_a) / 2)
     ax.set_xticklabels(zone_names)
     ax.set_ylabel('Reconstruction Error (MSE)')
-    ax.set_title('Per-Zone Reconstruction Error — FL Global Model')
+    ax.set_title(f'Per-Zone Reconstruction Error — {label}')
     ax.legend([bp1['boxes'][0], bp2['boxes'][0]], ['Normal', 'Attack'])
     fig.tight_layout()
-    fig.savefig(os.path.join(RESULTS_DIR, 'fedavg_fig_zone_errors.png'), dpi=150)
+    fig.savefig(os.path.join(RESULTS_DIR, f'{prefix}_fig_zone_errors.png'), dpi=150)
     plt.close(fig)
 
     print(f"All results saved to {RESULTS_DIR}", flush=True)

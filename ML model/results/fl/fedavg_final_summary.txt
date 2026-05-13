@@ -1,0 +1,13 @@
+============================================================
+FINAL RESULTS — FL FEDAVG — FL LSTM Autoencoder
+FL rounds     : 20
+Local epochs  : 3
+Num clients   : 4
+============================================================
+Optimal threshold: 0.026841 (99.4th percentile)
+Detection metrics:
+               precision    recall  f1-score   support
+        Normal      0.87      0.98      0.92      3372
+ Replay Attack      0.64      0.21      0.32       631
+AUC-ROC  : 0.8305
+============================================================

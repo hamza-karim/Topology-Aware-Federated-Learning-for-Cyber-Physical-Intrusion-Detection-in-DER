@@ -1,14 +1,10 @@
 """
-compare_models.py  — Generate paper comparison figures for all model variants.
+compare_models.py  - Generate paper comparison figures for all model variants.
 
 Run on your laptop AFTER:
-  1. FL training is complete on the Jetson (50 rounds)
+  1. FL training is complete on the Jetson (10 rounds x 5 local epochs)
   2. test_server.py has run on AGX 04
-  3. You have copied the FL results to your laptop:
-
-     mkdir -p "ML model/results/fl"
-     scp jetson@10.226.44.86:"~/fl/results/fedavg_*.npy" "ML model/results/fl/"
-     scp jetson@10.226.44.86:"~/fl/models/fedavg_training_log.csv" "ML model/results/fl/"
+  3. You have copied the FL results to your laptop with fetch_fl_results.sh
 
 Usage:
   python compare_models.py
@@ -35,7 +31,6 @@ ML_MODELS_DIR  = os.path.join(SCRIPT_DIR, "ML model", "models")
 FL_RESULTS_DIR = os.path.join(SCRIPT_DIR, "ML model", "results", "fl")
 TEST_CSV       = os.path.join(SCRIPT_DIR, "FL", "Server", "centralized_test_combined.csv")
 OUT_DIR        = os.path.join(SCRIPT_DIR, "ML model", "results", "comparison")
-FL_TRAIN_LOG   = os.path.join(FL_RESULTS_DIR, "fedavg_training_log.csv")
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(FL_RESULTS_DIR, exist_ok=True)
 
@@ -51,17 +46,49 @@ ZONE_BUSES = {
     'zone4': range(25, 33),
 }
 
+# Fixed colors for non-FL models
 COLORS = {
     'Centralized':  '#2c7bb6',
     'Zone 1 Local': '#74c476',
     'Zone 2 Local': '#41ab5d',
     'Zone 3 Local': '#238b45',
     'Zone 4 Local': '#005a32',
-    'FL FedAvg':    '#d7191c',
 }
+# Colors assigned dynamically to FL variants (in discovery order)
+FL_COLORS = ['#d7191c', '#ff7f00', '#984ea3', '#4daf4a', '#a65628']
 
-MODEL_ORDER = ['Centralized', 'Zone 1 Local', 'Zone 2 Local',
-               'Zone 3 Local', 'Zone 4 Local', 'FL FedAvg']
+STATIC_MODEL_ORDER = ['Centralized', 'Zone 1 Local', 'Zone 2 Local',
+                      'Zone 3 Local', 'Zone 4 Local']
+
+
+def prefix_to_label(prefix):
+    if prefix == 'fedavg':
+        return 'FL FedAvg'
+    if prefix == 'fedprox':
+        return 'FL FedProx (mu=0.01)'  # legacy prefix before mu was included
+    if prefix.startswith('fedprox_'):
+        mu = prefix.replace('fedprox_', '')
+        return f'FL FedProx (mu={mu})'
+    if prefix == 'fedadam':
+        return 'FL FedAdam'
+    if prefix.startswith('fedadam_'):
+        eta = prefix.replace('fedadam_', '')
+        return f'FL FedAdam (eta={eta})'
+    return prefix.upper()
+
+
+def discover_fl_results():
+    """Return list of (prefix, label) for all FL results found in FL_RESULTS_DIR."""
+    import glob
+    found = []
+    for path in sorted(glob.glob(os.path.join(FL_RESULTS_DIR, '*_errors.npy'))):
+        fname = os.path.basename(path)
+        if fname.endswith('_zone_errors.npy'):
+            continue  # skip per-zone error files
+        prefix = fname.replace('_errors.npy', '')
+        found.append((prefix, prefix_to_label(prefix)))
+    found.sort(key=lambda x: (0 if x[0] == 'fedavg' else 1, x[0]))
+    return found
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -146,14 +173,11 @@ def get_local_zone_errors(feature_df, zone_id):
     return mse_errors(model, windows)
 
 
-def get_fl_errors():
-    errors_path = os.path.join(FL_RESULTS_DIR, 'fedavg_errors.npy')
-    labels_path = os.path.join(FL_RESULTS_DIR, 'fedavg_labels.npy')
+def get_fl_errors(prefix):
+    errors_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_errors.npy')
+    labels_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_labels.npy')
     if not os.path.exists(errors_path):
-        print(f"  [SKIP] FL errors not found. Copy from Jetson:")
-        print(f'    mkdir -p "ML model/results/fl"')
-        print(f'    scp jetson@10.226.44.86:"~/fl/results/fedavg_*.npy" "ML model/results/fl/"')
-        print(f'    scp jetson@10.226.44.86:"~/fl/models/fedavg_training_log.csv" "ML model/results/fl/"')
+        print(f"  [SKIP] {prefix} errors not found - run fetch_fl_results.sh")
         return None, None
     return np.load(errors_path), np.load(labels_path)
 
@@ -168,21 +192,21 @@ def fig_roc(all_errors, all_labels, window_labels):
         labels = all_labels.get(name, window_labels)
         fpr_v, tpr_v, _ = roc_curve(labels, errors)
         auc = roc_auc_score(labels, errors)
-        lw = 2.5 if name in ('Centralized', 'FL FedAvg') else 1.2
-        ls = '-'  if name in ('Centralized', 'FL FedAvg') else '--'
-        ax.plot(fpr_v, tpr_v, color=COLORS[name], linewidth=lw,
+        lw = 2.5 if (name == 'Centralized' or name.startswith('FL')) else 1.2
+        ls = '-'  if (name == 'Centralized' or name.startswith('FL')) else '--'
+        ax.plot(fpr_v, tpr_v, color=COLORS.get(name, '#888888'), linewidth=lw,
                 linestyle=ls, label=f'{name}  (AUC={auc:.4f})')
     ax.plot([0, 1], [0, 1], 'k--', linewidth=0.8, label='Random')
     ax.set_xlabel('False Positive Rate', fontsize=12)
     ax.set_ylabel('True Positive Rate', fontsize=12)
-    ax.set_title('ROC Curves — All Model Variants', fontsize=13)
+    ax.set_title('ROC Curves - All Model Variants', fontsize=13)
     ax.legend(loc='lower right', fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     path = os.path.join(OUT_DIR, 'fig_roc_comparison.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(path)}')
 
 
 # ── Figure 2: Precision-Recall curves ─────────────────────────────────────
@@ -195,20 +219,20 @@ def fig_pr(all_errors, all_labels, window_labels):
         labels = all_labels.get(name, window_labels)
         prec_v, rec_v, _ = precision_recall_curve(labels, errors)
         ap = average_precision_score(labels, errors)
-        lw = 2.5 if name in ('Centralized', 'FL FedAvg') else 1.2
-        ls = '-'  if name in ('Centralized', 'FL FedAvg') else '--'
-        ax.plot(rec_v, prec_v, color=COLORS[name], linewidth=lw,
+        lw = 2.5 if (name == 'Centralized' or name.startswith('FL')) else 1.2
+        ls = '-'  if (name == 'Centralized' or name.startswith('FL')) else '--'
+        ax.plot(rec_v, prec_v, color=COLORS.get(name, '#888888'), linewidth=lw,
                 linestyle=ls, label=f'{name}  (AP={ap:.4f})')
     ax.set_xlabel('Recall', fontsize=12)
     ax.set_ylabel('Precision', fontsize=12)
-    ax.set_title('Precision-Recall Curves — All Model Variants', fontsize=13)
+    ax.set_title('Precision-Recall Curves - All Model Variants', fontsize=13)
     ax.legend(loc='upper right', fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     path = os.path.join(OUT_DIR, 'fig_pr_comparison.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(path)}')
 
 
 # ── Figure 3: Bar chart comparison ────────────────────────────────────────
@@ -243,14 +267,14 @@ def fig_bar(all_errors, all_labels, window_labels):
     ax.set_xticklabels(names_used, rotation=15, ha='right', fontsize=9)
     ax.set_ylim(0, 1.15)
     ax.set_ylabel('Score', fontsize=12)
-    ax.set_title('Detection Performance — All Model Variants', fontsize=13)
+    ax.set_title('Detection Performance - All Model Variants', fontsize=13)
     ax.legend(loc='upper right', fontsize=9)
     ax.grid(True, axis='y', alpha=0.3)
     fig.tight_layout()
     path = os.path.join(OUT_DIR, 'fig_bar_comparison.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(path)}')
 
 
 # ── Figure 4: Threshold sweep ──────────────────────────────────────────────
@@ -264,11 +288,11 @@ def fig_sweep(all_errors, all_labels, window_labels):
         labels = all_labels.get(name, window_labels)
         rows   = sweep_metrics(errors, labels)
         pcts   = [r['pct'] for r in rows]
-        lw = 2.5 if name in ('Centralized', 'FL FedAvg') else 1.2
-        ls = '-'  if name in ('Centralized', 'FL FedAvg') else '--'
-        axes[0].plot(pcts, [r['f1']     for r in rows], color=COLORS[name],
+        lw = 2.5 if (name == 'Centralized' or name.startswith('FL')) else 1.2
+        ls = '-'  if (name == 'Centralized' or name.startswith('FL')) else '--'
+        axes[0].plot(pcts, [r['f1']     for r in rows], color=COLORS.get(name, '#888888'),
                      linewidth=lw, linestyle=ls, label=name)
-        axes[1].plot(pcts, [r['recall'] for r in rows], color=COLORS[name],
+        axes[1].plot(pcts, [r['recall'] for r in rows], color=COLORS.get(name, '#888888'),
                      linewidth=lw, linestyle=ls, label=name)
 
     for ax, ylabel, title in zip(
@@ -288,14 +312,15 @@ def fig_sweep(all_errors, all_labels, window_labels):
     path = os.path.join(OUT_DIR, 'fig_threshold_sweep.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(path)}')
 
 
 # ── Figure 5: Error distribution comparison ────────────────────────────────
 def fig_distributions(all_errors, all_labels, window_labels):
-    key_models = [n for n in ['Centralized', 'FL FedAvg'] if all_errors.get(n) is not None]
+    key_models = [n for n in MODEL_ORDER if all_errors.get(n) is not None
+                  and (n == 'Centralized' or n.startswith('FL'))]
     if not key_models:
-        print('  [SKIP] fig_error_distributions — no models available')
+        print('  [SKIP] fig_error_distributions - no models available')
         return
 
     fig, axes = plt.subplots(1, len(key_models), figsize=(7 * len(key_models), 5),
@@ -323,35 +348,47 @@ def fig_distributions(all_errors, all_labels, window_labels):
     path = os.path.join(OUT_DIR, 'fig_error_distributions.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(path)}')
 
 
 # ── Figure 6: FL training convergence ─────────────────────────────────────
 def fig_convergence():
-    if not os.path.exists(FL_TRAIN_LOG):
-        print(f'  [SKIP] fig_fl_convergence — training log not found at {FL_TRAIN_LOG}')
+    available = []
+    for i, (prefix, label) in enumerate(discover_fl_results()):
+        log_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_training_log.csv')
+        if os.path.exists(log_path):
+            available.append((log_path, label, FL_COLORS[i % len(FL_COLORS)]))
+    if not available:
+        print(f'  [SKIP] fig_fl_convergence - no training logs found in {FL_RESULTS_DIR}')
         return
-    df = pd.read_csv(FL_TRAIN_LOG)
     fig, ax = plt.subplots(figsize=(9, 5))
-    ax.plot(df['round'], df['loss'], color='#d7191c', linewidth=2,
-            marker='o', markersize=3)
+    for path, label, color in available:
+        df = pd.read_csv(path)
+        ax.plot(df['round'], df['loss'], color=color, linewidth=2,
+                marker='o', markersize=3, label=f'{label} ({len(df)} rounds)')
     ax.set_xlabel('FL Round', fontsize=12)
     ax.set_ylabel('Aggregated Loss (MSE)', fontsize=12)
-    ax.set_title('Federated Learning Training Convergence (50 Rounds)', fontsize=13)
+    ax.set_title('Federated Learning Training Convergence', fontsize=13)
+    ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    path = os.path.join(OUT_DIR, 'fig_fl_convergence.png')
-    fig.savefig(path, dpi=150)
+    out = os.path.join(OUT_DIR, 'fig_fl_convergence.png')
+    fig.savefig(out, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(out)}')
 
 
 # ── Figure 7: Per-zone FL error analysis ──────────────────────────────────
 def fig_zone_analysis():
-    zone_path  = os.path.join(FL_RESULTS_DIR, 'fedavg_zone_errors.npy')
-    labels_path = os.path.join(FL_RESULTS_DIR, 'fedavg_labels.npy')
+    for prefix, label in discover_fl_results():
+        _fig_zone_analysis_single(prefix, label)
+
+
+def _fig_zone_analysis_single(prefix, label):
+    zone_path   = os.path.join(FL_RESULTS_DIR, f'{prefix}_zone_errors.npy')
+    labels_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_labels.npy')
     if not os.path.exists(zone_path):
-        print(f'  [SKIP] fig_fl_zone_analysis — zone errors not found at {zone_path}')
+        print(f'  [SKIP] fig_zone_analysis ({prefix}) - {zone_path} not found')
         return
 
     zone_errors = np.load(zone_path)   # (n_windows, 4)
@@ -374,7 +411,7 @@ def fig_zone_analysis():
     axes[0].set_xticks((pos_n + pos_a) / 2)
     axes[0].set_xticklabels(zone_names)
     axes[0].set_ylabel('Reconstruction Error (MSE)', fontsize=11)
-    axes[0].set_title('Per-Zone Error Distribution (FL Global Model)', fontsize=12)
+    axes[0].set_title(f'Per-Zone Error Distribution ({label})', fontsize=12)
     axes[0].legend([bp1['boxes'][0], bp2['boxes'][0]], ['Normal', 'Replay Attack'],
                    fontsize=9)
 
@@ -388,15 +425,15 @@ def fig_zone_analysis():
     axes[1].set_xticks(x)
     axes[1].set_xticklabels(zone_names)
     axes[1].set_ylabel('Mean Reconstruction Error (MSE)', fontsize=11)
-    axes[1].set_title('Mean Per-Zone Error — Normal vs Attack', fontsize=12)
+    axes[1].set_title(f'Mean Per-Zone Error - Normal vs Attack ({label})', fontsize=12)
     axes[1].legend(fontsize=9)
     axes[1].grid(True, axis='y', alpha=0.3)
 
     fig.tight_layout()
-    path = os.path.join(OUT_DIR, 'fig_fl_zone_analysis.png')
+    path = os.path.join(OUT_DIR, f'fig_{prefix}_zone_analysis.png')
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    print(f'  ✓ {os.path.basename(path)}')
+    print(f'  [OK] {os.path.basename(path)}')
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -414,7 +451,7 @@ def main():
     all_errors = {}
     all_labels = {}
 
-    print('\nRunning inference — Centralized model...')
+    print('\nRunning inference - Centralized model...')
     try:
         all_errors['Centralized'] = get_centralized_errors(feature_df)
         m = compute_metrics(all_errors['Centralized'], window_labels)
@@ -428,7 +465,7 @@ def main():
         'zone3': 'Zone 3 Local', 'zone4': 'Zone 4 Local',
     }
     for zone_id, zone_name in zone_map.items():
-        print(f'\nRunning inference — {zone_name}...')
+        print(f'\nRunning inference - {zone_name}...')
         try:
             all_errors[zone_name] = get_local_zone_errors(feature_df, zone_id)
             m = compute_metrics(all_errors[zone_name], window_labels)
@@ -437,15 +474,24 @@ def main():
             print(f'  [SKIP] {e}')
             all_errors[zone_name] = None
 
-    print('\nLoading FL errors...')
-    fl_errors, fl_labels = get_fl_errors()
-    all_errors['FL FedAvg'] = fl_errors
-    if fl_labels is not None:
-        all_labels['FL FedAvg'] = fl_labels
-        m = compute_metrics(fl_errors, fl_labels)
-        print(f'  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+    # Discover all FL result files and assign colors
+    fl_variants = discover_fl_results()
+    global MODEL_ORDER, COLORS
+    MODEL_ORDER = STATIC_MODEL_ORDER[:]
+    for i, (prefix, label) in enumerate(fl_variants):
+        COLORS[label] = FL_COLORS[i % len(FL_COLORS)]
+        MODEL_ORDER.append(label)
 
-    print(f'\nGenerating figures → {OUT_DIR}')
+    print('\nLoading FL errors...')
+    for prefix, label in fl_variants:
+        errors, labels = get_fl_errors(prefix)
+        all_errors[label] = errors
+        if labels is not None:
+            all_labels[label] = labels
+            m = compute_metrics(errors, labels)
+            print(f'  [{label}]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+
+    print(f'\nGenerating figures -> {OUT_DIR}')
     fig_roc(all_errors, all_labels, window_labels)
     fig_pr(all_errors, all_labels, window_labels)
     fig_bar(all_errors, all_labels, window_labels)

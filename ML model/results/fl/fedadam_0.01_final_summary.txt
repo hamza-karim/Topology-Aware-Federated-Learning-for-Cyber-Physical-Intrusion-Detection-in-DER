@@ -1,0 +1,13 @@
+============================================================
+FINAL RESULTS — FL FEDADAM (ETA=0.01) — FL LSTM Autoencoder
+FL rounds     : 20
+Local epochs  : 3
+Num clients   : 4
+============================================================
+Optimal threshold: 0.026329 (99.4th percentile)
+Detection metrics:
+               precision    recall  f1-score   support
+        Normal      0.87      0.97      0.92      3372
+ Replay Attack      0.61      0.22      0.33       631
+AUC-ROC  : 0.8114
+============================================================

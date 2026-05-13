@@ -128,6 +128,29 @@ def build_model(window_size):
     return model
 
 
+def fit_with_proximal(model, x_train, global_weights, proximal_mu, local_epochs, batch_size):
+    """FedProx local training: MSE + (mu/2)*||w - w_global||^2.
+    Uses model.fit() with a custom loss so memory usage matches FedAvg.
+    """
+    global_weights_t = [tf.constant(w, dtype=tf.float32) for w in global_weights]
+
+    def proximal_loss(y_true, y_pred):
+        mse = tf.reduce_mean(tf.square(y_true - y_pred))
+        prox = tf.add_n([
+            tf.reduce_sum(tf.square(w - g))
+            for w, g in zip(model.trainable_variables, global_weights_t)
+        ])
+        return mse + (proximal_mu / 2.0) * prox
+
+    model.compile(optimizer=model.optimizer, loss=proximal_loss)
+    model.fit(x_train, x_train, epochs=local_epochs, batch_size=batch_size, verbose=0)
+
+    # Recompile with standard MSE and return pure MSE loss for consistent reporting
+    model.compile(optimizer=model.optimizer, loss='mse')
+    loss = float(model.evaluate(x_train, x_train, batch_size=batch_size, verbose=0))
+    return loss
+
+
 class FlowerClient(fl.client.NumPyClient):
     def __init__(self, cfg, x_train):
         self.zone_id       = cfg['zone_id']
@@ -146,16 +169,28 @@ class FlowerClient(fl.client.NumPyClient):
     def fit(self, parameters, config):
         self.set_parameters(parameters)
         self.current_round = config.get('server_round', self.current_round + 1)
-        local_epochs = config.get('local_epochs', self.local_epochs)
+        local_epochs  = config.get('local_epochs', self.local_epochs)
+        proximal_mu   = float(config.get('proximal_mu', 0.0))
 
-        history = self.model.fit(
-            self.x_train, self.x_train,
-            epochs=local_epochs,
-            batch_size=self.batch_size,
-            verbose=0,
-        )
-        loss = float(history.history['loss'][-1])
-        print(f"Round {self.current_round} | Zone {self.zone_id} | Loss: {loss:.6f}", flush=True)
+        if proximal_mu > 0.0:
+            global_weights = [w.copy() for w in self.model.get_weights()]
+            loss = fit_with_proximal(
+                self.model, self.x_train, global_weights,
+                proximal_mu, local_epochs, self.batch_size,
+            )
+            print(f"Round {self.current_round} | Zone {self.zone_id} | "
+                  f"FedProx (mu={proximal_mu}) Loss: {loss:.6f}", flush=True)
+        else:
+            history = self.model.fit(
+                self.x_train, self.x_train,
+                epochs=local_epochs,
+                batch_size=self.batch_size,
+                verbose=0,
+            )
+            loss = float(history.history['loss'][-1])
+            print(f"Round {self.current_round} | Zone {self.zone_id} | "
+                  f"FedAvg Loss: {loss:.6f}", flush=True)
+
         return self.get_parameters(config={}), len(self.x_train), {'loss': loss}
 
     def evaluate(self, parameters, config):
@@ -178,7 +213,7 @@ def load_data(cfg):
     os.makedirs(cfg['model_dir'], exist_ok=True)
     scaler = MinMaxScaler()
     data = scaler.fit_transform(data)
-    joblib.dump(scaler, os.path.join(cfg['model_dir'], f"fedavg_{cfg['zone_id']}_scaler.pkl"))
+    joblib.dump(scaler, os.path.join(cfg['model_dir'], f"fl_{cfg['zone_id']}_scaler.pkl"))
 
     data = pad_to_n(data)
     return create_windows(data, cfg['window_size'])

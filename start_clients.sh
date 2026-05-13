@@ -2,7 +2,7 @@
 # start_clients.sh — run from your laptop to start or stop all 4 FL clients
 #
 # Usage:
-#   bash start_clients.sh          # start all clients
+#   bash start_clients.sh          # start all clients (prompts for strategy)
 #   bash start_clients.sh stop     # stop all client containers
 
 SERVER_IP="10.226.44.86"
@@ -17,6 +17,7 @@ NAMES=(  "Nano 07"       "Nano 08"       "Nano 10"       "Nano 13"     )
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 SSH="ssh -o BatchMode=yes -o ConnectTimeout=10"
@@ -80,11 +81,26 @@ if [ "$1" == "stop" ]; then
     echo ""
 
 else
+    # ── Strategy reminder ─────────────────────────────────────────
+    echo ""
+    while true; do
+        read -rp "  Strategy you configured on the server [fedavg/fedprox/fedadam]: " STRATEGY
+        STRATEGY="${STRATEGY:-fedavg}"
+        STRATEGY="${STRATEGY,,}"
+        if [[ "$STRATEGY" == "fedavg" || "$STRATEGY" == "fedprox" || "$STRATEGY" == "fedadam" ]]; then
+            break
+        fi
+        echo "  Please enter 'fedavg', 'fedprox', or 'fedadam'."
+    done
+
+    # ── Banner ────────────────────────────────────────────────────
     echo ""
     echo -e "${CYAN}========================================"
     echo "  Starting FL clients"
-    echo "  Server : AGX 04 @ ${SERVER_IP}:8080"
+    echo "  Server  : AGX 04 @ ${SERVER_IP}:8080"
+    echo "  Strategy: ${STRATEGY}"
     echo -e "========================================${NC}"
+    echo -e "${YELLOW}  Clients receive strategy + mu from the server automatically.${NC}"
     echo ""
 
     for i in "${!HOSTS[@]}"; do
