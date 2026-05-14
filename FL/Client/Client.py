@@ -191,7 +191,7 @@ class FlowerClient(fl.client.NumPyClient):
             print(f"Round {self.current_round} | Zone {self.zone_id} | "
                   f"FedAvg Loss: {loss:.6f}", flush=True)
 
-        return self.get_parameters(config={}), len(self.x_train), {'loss': loss}
+        return self.get_parameters(config={}), len(self.x_train), {'loss': loss, 'zone_id': self.zone_id}
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)

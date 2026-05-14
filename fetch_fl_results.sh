@@ -42,16 +42,17 @@ echo "  ${SERVER_USER}@${SERVER_IP}"
 echo -e "========================================${NC}"
 echo ""
 
-# Copy all result files for all strategies (fedavg + fedprox + fedadam)
+# Copy all result files for all strategies
 echo "  Copying results/..."
 scp -o BatchMode=yes -o ConnectTimeout=10 \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/fedavg_*" \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/fedprox_*" \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/fedadam_*" \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/intact_*" \
     "$LOCAL_DIR/" 2>/dev/null
-echo -e "${GREEN}  ✓ results copied (missing files skipped)${NC}"
+echo -e "${GREEN}  [OK] results copied (missing files skipped)${NC}"
 
-# Copy training logs and run configs for all strategies (wildcard covers all mu/eta variants)
+# Copy training logs and run configs for all strategies
 echo "  Copying training logs and run configs..."
 scp -o BatchMode=yes -o ConnectTimeout=10 \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/fedavg_training_log.csv" \
@@ -65,7 +66,11 @@ scp -o BatchMode=yes -o ConnectTimeout=10 \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/fedadam_*_training_log.csv" \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/fedadam_*_run_config.json" \
     "$LOCAL_DIR/" 2>/dev/null
-echo -e "${GREEN}  ✓ logs + configs copied (missing files skipped)${NC}"
+scp -o BatchMode=yes -o ConnectTimeout=10 \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/intact_training_log.csv" \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/intact_run_config.json" \
+    "$LOCAL_DIR/" 2>/dev/null
+echo -e "${GREEN}  [OK] logs + configs copied (missing files skipped)${NC}"
 
 echo ""
 echo -e "${CYAN}Files in ${LOCAL_DIR}:${NC}"

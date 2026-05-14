@@ -87,10 +87,10 @@ else
         read -rp "  Strategy you configured on the server [fedavg/fedprox/fedadam]: " STRATEGY
         STRATEGY="${STRATEGY:-fedavg}"
         STRATEGY="${STRATEGY,,}"
-        if [[ "$STRATEGY" == "fedavg" || "$STRATEGY" == "fedprox" || "$STRATEGY" == "fedadam" ]]; then
+        if [[ "$STRATEGY" == "fedavg" || "$STRATEGY" == "fedprox" || "$STRATEGY" == "fedadam" || "$STRATEGY" == "intact" ]]; then
             break
         fi
-        echo "  Please enter 'fedavg', 'fedprox', or 'fedadam'."
+        echo "  Please enter 'fedavg', 'fedprox', 'fedadam', or 'intact'."
     done
 
     # ── Banner ────────────────────────────────────────────────────

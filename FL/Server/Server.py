@@ -8,12 +8,44 @@ import json
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
 import flwr as fl
-from flwr.common import FitRes, Parameters, Scalar, parameters_to_ndarrays, ndarrays_to_parameters
+from flwr.common import FitIns, FitRes, Parameters, Scalar, parameters_to_ndarrays, ndarrays_to_parameters
 from flwr.server.client_proxy import ClientProxy
 
 WINDOW_SIZE  = 30
 NUM_FEATURES = 36
+
+ZONE_NAMES = ['zone1', 'zone2', 'zone3', 'zone4']
+ZONE_BUSES = {
+    'zone1': set(range(1, 9)),
+    'zone2': set(range(9, 18)),
+    'zone3': set(range(18, 25)),
+    'zone4': set(range(25, 33)),
+}
+ADMITTANCE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'zone_admittance.csv')
+
+
+def load_admittance_matrix(csv_path=ADMITTANCE_PATH):
+    """Read zone_admittance.csv and return row-normalised inter-zone weight dict.
+    W[zone_i][zone_j] = admittance(i,j) / sum_k admittance(i,k)  for j != i
+    """
+    df = pd.read_csv(csv_path)
+    raw = {z: {z2: 0.0 for z2 in ZONE_NAMES} for z in ZONE_NAMES}
+    for _, row in df.iterrows():
+        fb  = int(row['from_bus'])
+        tb  = int(row['to_bus'])
+        adm = float(row['admittance'])
+        fz  = next((z for z, buses in ZONE_BUSES.items() if fb in buses), None)
+        tz  = next((z for z, buses in ZONE_BUSES.items() if tb in buses), None)
+        if fz and tz and fz != tz:
+            raw[fz][tz] += adm
+            raw[tz][fz] += adm
+    W = {}
+    for z in ZONE_NAMES:
+        total = sum(raw[z][z2] for z2 in ZONE_NAMES if z2 != z)
+        W[z]  = {z2: raw[z][z2] / total for z2 in ZONE_NAMES if z2 != z}
+    return W
 
 
 def prompt(question, default=None, cast=str):
@@ -40,17 +72,22 @@ def get_user_config():
     local_epochs = prompt("Local epochs (sent to clients)", default=3, cast=int)
 
     while True:
-        strategy = prompt("Strategy [fedavg/fedprox/fedadam]", default="fedavg").lower()
-        if strategy in ("fedavg", "fedprox", "fedadam"):
+        strategy = prompt("Strategy [fedavg/fedprox/fedadam/intact]", default="fedavg").lower()
+        if strategy in ("fedavg", "fedprox", "fedadam", "intact"):
             break
-        print("  Choose 'fedavg', 'fedprox', or 'fedadam'.")
+        print("  Choose 'fedavg', 'fedprox', 'fedadam', or 'intact'.")
 
     proximal_mu = 0.0
     server_eta  = 0.0
+    alpha       = 0.5
+    gamma       = 0.3
     if strategy == "fedprox":
         proximal_mu = prompt("Proximal mu", default=0.01, cast=float)
     elif strategy == "fedadam":
         server_eta = prompt("Server learning rate (eta)", default=0.01, cast=float)
+    elif strategy == "intact":
+        alpha = prompt("Self-retention alpha (0=full neighbour mix, 1=local only)", default=0.5, cast=float)
+        gamma = prompt("Consistency penalty gamma (inference)", default=0.3, cast=float)
 
     model_dir = prompt("Model dir", default="/app/src/models")
     print("=" * 50)
@@ -58,6 +95,8 @@ def get_user_config():
         print(f"  Strategy : FedProx  (mu={proximal_mu})")
     elif strategy == "fedadam":
         print(f"  Strategy : FedAdam  (eta={server_eta})")
+    elif strategy == "intact":
+        print(f"  Strategy : INTACT   (alpha={alpha}, gamma={gamma})")
     else:
         print(f"  Strategy : FedAvg")
     print()
@@ -69,6 +108,8 @@ def get_user_config():
         'strategy':     strategy,
         'proximal_mu':  proximal_mu,
         'server_eta':   server_eta,
+        'alpha':        alpha,
+        'gamma':        gamma,
         'model_dir':    model_dir,
     }
 
@@ -138,6 +179,99 @@ def make_save_strategy(base_cls):
     return SaveModelStrategy
 
 
+class IntactStrategy(fl.server.strategy.FedAvg):
+    """Admittance-weighted personalised federated aggregation (INTACT).
+
+    Each zone receives a model that is a convex combination of its own
+    trained weights and its electrically-coupled neighbours' weights:
+        theta_i_new = alpha * theta_i + (1-alpha) * sum_j( W[i,j] * theta_j )
+    """
+
+    def __init__(self, model_dir, local_epochs, alpha, gamma, W, **kwargs):
+        super().__init__(**kwargs)
+        self.model_dir    = model_dir
+        self.local_epochs = local_epochs
+        self.alpha        = alpha   # self-retention weight
+        self.gamma        = gamma   # consistency penalty weight (saved for test_intact.py)
+        self.W            = W       # {zone_id: {other_zone: normalised_weight}}
+        self.zone_weights = {}      # zone_id -> List[ndarray]  (personalised, current round)
+        self.cid_to_zone  = {}      # client cid -> zone_id
+        self.round_losses = []
+
+    # ── Round start: send each zone its own personalised model ────────────────
+    def configure_fit(self, server_round, parameters, client_manager):
+        config = self.on_fit_config_fn(server_round) if self.on_fit_config_fn else {}
+        sample_size, min_num = self.num_fit_clients(client_manager.num_available())
+        clients = client_manager.sample(num_clients=sample_size, min_num_clients=min_num)
+
+        fit_ins_list = []
+        for client in clients:
+            zone_id = self.cid_to_zone.get(client.cid)
+            if zone_id and zone_id in self.zone_weights:
+                # From round 2 onwards send personalised model for this zone
+                params = ndarrays_to_parameters(self.zone_weights[zone_id])
+            else:
+                # Round 1: everyone starts from the same initial parameters
+                params = parameters
+            fit_ins_list.append((client, FitIns(params, config)))
+        return fit_ins_list
+
+    # ── Round end: admittance-weighted mixing ─────────────────────────────────
+    def aggregate_fit(self, server_round, results, failures):
+        if not results:
+            return None, {}
+
+        # Collect raw weights and zone ids from each client
+        zone_raw  = {}
+        zone_loss = {}
+        for proxy, fit_res in results:
+            zid = fit_res.metrics.get('zone_id')
+            if not zid:
+                continue
+            self.cid_to_zone[proxy.cid] = zid
+            zone_raw[zid]  = parameters_to_ndarrays(fit_res.parameters)
+            zone_loss[zid] = float(fit_res.metrics.get('loss', 0.0))
+
+        # Admittance mixing: theta_i_new = alpha*theta_i + (1-alpha)*sum_j(W[i,j]*theta_j)
+        new_weights = {}
+        for zid, own in zone_raw.items():
+            neighbour_mix = None
+            for other_zone, w in self.W.get(zid, {}).items():
+                if other_zone not in zone_raw:
+                    continue
+                scaled = [w * layer for layer in zone_raw[other_zone]]
+                neighbour_mix = (scaled if neighbour_mix is None
+                                 else [m + s for m, s in zip(neighbour_mix, scaled)])
+
+            if neighbour_mix is None:
+                new_weights[zid] = own
+            else:
+                new_weights[zid] = [
+                    self.alpha * o + (1.0 - self.alpha) * m
+                    for o, m in zip(own, neighbour_mix)
+                ]
+
+        self.zone_weights = new_weights
+
+        # Save per-round and latest final weights for each zone
+        os.makedirs(self.model_dir, exist_ok=True)
+        for zid, weights in new_weights.items():
+            np.savez(os.path.join(self.model_dir,
+                                  f'intact_{zid}_round_{server_round}_weights.npz'), *weights)
+            np.savez(os.path.join(self.model_dir,
+                                  f'intact_{zid}_final_weights.npz'), *weights)
+
+        avg_loss = sum(zone_loss.values()) / len(zone_loss) if zone_loss else 0.0
+        self.round_losses.append((server_round, avg_loss))
+        print(f"Round {server_round:>3} | Zones: {sorted(new_weights)} | "
+              f"Avg Loss: {avg_loss:.6f}", flush=True)
+
+        # Return global average so Flower's evaluate phase still works
+        all_w    = list(new_weights.values())
+        global_w = [np.mean([w[i] for w in all_w], axis=0) for i in range(len(all_w[0]))]
+        return ndarrays_to_parameters(global_w), {'avg_loss': avg_loss}
+
+
 def main():
     cfg = get_user_config()
 
@@ -164,7 +298,21 @@ def main():
         on_fit_config_fn=fit_config,
     )
 
-    if cfg['strategy'] == 'fedadam':
+    if cfg['strategy'] == 'intact':
+        print("Loading admittance matrix...", flush=True)
+        W = load_admittance_matrix()
+        for z, neighbours in W.items():
+            print(f"  {z}: " + ", ".join(f"{n}={v:.3f}" for n, v in neighbours.items()),
+                  flush=True)
+        strategy = IntactStrategy(
+            model_dir=cfg['model_dir'],
+            local_epochs=cfg['local_epochs'],
+            alpha=cfg['alpha'],
+            gamma=cfg['gamma'],
+            W=W,
+            **common_kwargs,
+        )
+    elif cfg['strategy'] == 'fedadam':
         print("Building initial model parameters for FedAdam...", flush=True)
         SaveModelStrategy = make_save_strategy(fl.server.strategy.FedAdam)
         strategy = SaveModelStrategy(
@@ -213,6 +361,8 @@ def main():
                 'num_clients':  cfg['min_clients'],
                 'proximal_mu':  cfg['proximal_mu'],
                 'server_eta':   cfg['server_eta'],
+                'alpha':        cfg['alpha'],
+                'gamma':        cfg['gamma'],
             }, f, indent=2)
         print(f"Run config saved to {run_cfg_path}", flush=True)
 

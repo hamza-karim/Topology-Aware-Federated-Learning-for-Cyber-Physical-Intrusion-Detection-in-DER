@@ -53,6 +53,7 @@ COLORS = {
     'Zone 2 Local': '#41ab5d',
     'Zone 3 Local': '#238b45',
     'Zone 4 Local': '#005a32',
+    'FL INTACT':    '#1a9641',
 }
 # Colors assigned dynamically to FL variants (in discovery order)
 FL_COLORS = ['#d7191c', '#ff7f00', '#984ea3', '#4daf4a', '#a65628']
@@ -78,13 +79,15 @@ def prefix_to_label(prefix):
 
 
 def discover_fl_results():
-    """Return list of (prefix, label) for all FL results found in FL_RESULTS_DIR."""
+    """Return list of (prefix, label) for FedAvg/FedProx/FedAdam results in FL_RESULTS_DIR."""
     import glob
     found = []
     for path in sorted(glob.glob(os.path.join(FL_RESULTS_DIR, '*_errors.npy'))):
         fname = os.path.basename(path)
         if fname.endswith('_zone_errors.npy'):
             continue  # skip per-zone error files
+        if fname.startswith('intact_'):
+            continue  # INTACT handled separately via get_intact_system_errors()
         prefix = fname.replace('_errors.npy', '')
         found.append((prefix, prefix_to_label(prefix)))
     found.sort(key=lambda x: (0 if x[0] == 'fedavg' else 1, x[0]))
@@ -180,6 +183,28 @@ def get_fl_errors(prefix):
         print(f"  [SKIP] {prefix} errors not found - run fetch_fl_results.sh")
         return None, None
     return np.load(errors_path), np.load(labels_path)
+
+
+def get_intact_system_errors():
+    """Load INTACT per-zone consistency scores and return system-average + labels.
+
+    test_intact.py saves intact_{zid}_final_scores.npy and intact_window_labels.npy
+    to ~/fl/results on the server, which fetch_fl_results.sh pulls to FL_RESULTS_DIR.
+    System score = mean of the 4 per-zone consistency-adjusted scores.
+    """
+    zone_names  = ['zone1', 'zone2', 'zone3', 'zone4']
+    labels_path = os.path.join(FL_RESULTS_DIR, 'intact_window_labels.npy')
+    if not os.path.exists(labels_path):
+        print(f'  [SKIP] FL INTACT — intact_window_labels.npy not found in {FL_RESULTS_DIR}')
+        return None, None
+    zone_scores = []
+    for zid in zone_names:
+        score_path = os.path.join(FL_RESULTS_DIR, f'intact_{zid}_final_scores.npy')
+        if not os.path.exists(score_path):
+            print(f'  [SKIP] FL INTACT — intact_{zid}_final_scores.npy not found')
+            return None, None
+        zone_scores.append(np.load(score_path))
+    return np.mean(zone_scores, axis=0), np.load(labels_path)
 
 
 # ── Figure 1: ROC curves ───────────────────────────────────────────────────
@@ -358,6 +383,9 @@ def fig_convergence():
         log_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_training_log.csv')
         if os.path.exists(log_path):
             available.append((log_path, label, FL_COLORS[i % len(FL_COLORS)]))
+    intact_log = os.path.join(FL_RESULTS_DIR, 'intact_training_log.csv')
+    if os.path.exists(intact_log):
+        available.append((intact_log, 'FL INTACT', COLORS['FL INTACT']))
     if not available:
         print(f'  [SKIP] fig_fl_convergence - no training logs found in {FL_RESULTS_DIR}')
         return
@@ -490,6 +518,17 @@ def main():
             all_labels[label] = labels
             m = compute_metrics(errors, labels)
             print(f'  [{label}]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+
+    print('\nLoading INTACT system errors...')
+    intact_errors, intact_labels = get_intact_system_errors()
+    if intact_errors is not None:
+        all_errors['FL INTACT'] = intact_errors
+        all_labels['FL INTACT'] = intact_labels
+        MODEL_ORDER.append('FL INTACT')
+        m = compute_metrics(intact_errors, intact_labels)
+        print(f'  [FL INTACT]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+    else:
+        all_errors['FL INTACT'] = None
 
     print(f'\nGenerating figures -> {OUT_DIR}')
     fig_roc(all_errors, all_labels, window_labels)

@@ -1,0 +1,917 @@
+Total pages: 8
+--- PAGE 1 ---
+Topology-Aware Federated Learning for
+Cyber-Physical Intrusion Detection in DER
+Muhammad Hamza Karim, Derrick Agyapong, Bo Tu, Prakash Ranganathan
+Center for Cyber Security Research (C2SR)
+University of North Dakota, Grand Forks, North Dakota, USA
+{muhammad.karim, derrick.agyapong, bo.tu, prakash.ranganathan}@und.edu
+Abstract—The integration of Distributed Energy Resources
+(DERs) transforms traditional distribution grids into dynamic
+cyber-physical systems (CPS). However, the constant fluctuations
+in power generation caused by DERs make it easier for stealthy
+temporal cyberattacks, such as Replay and Denial of Service
+(DoS), to remain hidden within normal grid behavior. While
+Federated Learning (FL) provides privacy-preserving intrusion
+detection, existing models are fundamentally topology-blind;
+they evaluate edge nodes in isolation and fail to enforce
+underlying electrical constraints. To address this vulnerability,
+this
+paper
+proposes
+a
+Topology-Aware
+Federated
+Edge
+Learning framework. To simulate a distribution network we
+utilized IEEE 33-Bus network augmented with active solar
+DERs, the grid is geographically partitioned into distinct
+zones. Localized LSTM Autoencoders are deployed to edge
+clients to learn the temporal dynamics of physical states
+(Active Power, Reactive Power, Voltage Magnitude, and Phase
+Angle). A central server aggregates these models to enforce
+spatial-temporal consistency across the entire topology without
+centralizing raw operational data. By cross-validating physical
+constraints between neighboring zones, the proposed architecture
+successfully detects stealthy temporal manipulations that easily
+bypass isolated localized systems.
+Index
+Terms—Federated
+Learning,
+Distributed
+Energy
+Resources, Edge Computing, IDS , Cybersecurity.
+I. INTRODUCTION
+Historically, electrical distribution networks operated as
+passive one-way systems that delivered power from substations
+to consumers. However, the rapid growth of Distributed
+Energy Resources (DERs) has changed this structure. The grid
+now behaves as a dynamic bidirectional cyber-physical system
+(CPS) [1]. Although this shift enables decentralized energy
+management, it also introduces instability. Weather conditions
+such as sunlight, wind, and temperature directly influence
+power generation, causing continuous and unpredictable
+changes in power flow. This creates a noisy and complex
+operating
+environment,
+making
+it
+harder
+to
+separate
+normal behavior from attacks and ultimately increasing the
+cyber-physical attack surface.
+This inherent variability creates an ideal environment for
+sophisticated cyberattacks to remain undetected. Although
+conventional False Data Injection Attacks (FDIAs) often
+focus on manipulating sensor values directly, more advanced
+temporal attacks such as replay attacks exploit the timing
+and continuity of time-series data, making them significantly
+harder to detect within naturally volatile DER environments
+[9]. An attacker can record legitimate grid measurements
+during low-demand periods and replay them during peak
+demand to conceal malicious actions. Because the injected
+values remain within normal ranges, standard threshold-based
+detectors do not raise alarms. Instead, the attack takes
+advantage of the natural variability of DERs. From an isolated
+edge node’s perspective, a replayed active power signal can be
+indistinguishable from natural fluctuations caused by weather
+variations such as cloud cover [10].
+To secure decentralized grid infrastructure while preserving
+the privacy of sensitive operational data, researchers have
+increasingly adopted Federated Learning (FL) frameworks
+[11], [12]. However, existing FL-based intrusion detection
+methods remain largely topology-blind. They model DERs as
+independent entities and lack the spatial awareness needed to
+enforce physical constraints such as Kirchhoff’s voltage and
+current laws across multi-node distribution networks [13]. As
+a result, temporally consistent but malicious signals can evade
+detection at the local level, even when they violate the physical
+consistency of the broader system.
+To bridge the gap between IT-focused anomaly detection
+and
+OT-level
+physical
+constraint
+enforcement,
+this
+paper proposes the Intelligent Network Topology-Aware
+Collaborative Training (INTACT) framework. We utilized
+the IEEE 33-Bus distribution system [14] to simulate a
+neighborhood-level grid topology, specifically modeling the
+integration of active solar DERs to capture the complex
+dynamics of bidirectional power flow. The grid is partitioned
+into operational zones based on electrical proximity, where
+each zone is monitored by a localized edge computing client
+that trains a Long Short-Term Memory (LSTM) Autoencoder
+on its local physical state variables: Active Power (P),
+Reactive Power (Q), Voltage Magnitude (|V |) and Phase
+Angle (θ). Rather than centralizing raw grid data, zonal
+clients periodically transmit model weights to a federated
+aggregation server. Unlike standard Federated Averaging
+(FedAvg) [15], which treats all clients equally, our server
+assigns higher aggregation weight to zones that are more
+strongly connected in the physical network, measured by
+the admittance of the lines between them. This ensures
+that electrically coupled zones have greater influence on
+each other’s learned model, reflecting the real physical
+relationships of the grid. Additionally, after each round
+of aggregation, the server compares reconstruction errors
+between neighboring zones. Since real physical disturbances
+
+--- PAGE 2 ---
+TABLE I: Comparison of Related Intrusion Detection Works
+Method
+Physical System Model
+Attack Type
+Key Limitation
+Ref
+Hybrid Federated
+Learning
+None (communication layer
+only)
+DoS & Data Integrity
+Secures DNP3/Modbus protocols; no physical
+power flow modelling
+[2]
+Federated Deep
+Learning
+Physical measurements
+(CPPS)
+FDIAs
+Does not quantify detection impact of
+DER-induced bidirectional flow
+[3]
+Vertical Federated
+Learning
+Various sub-network
+measurements
+FDIAs
+No comparison of pre-DER vs. post-DER grid
+dynamics; unidirectional focus
+[4]
+Physics-Informed
+LSTM
+FOC-VSM swing equations
+FDIAs on Control Layer
+Limited to grid-forming VSM control; not
+applicable to radial DER distribution networks
+[5]
+Physics-Informed
+Conv. AE
+DER-integrated grids (P, Q,
+V , θ)
+Stealthy FDIAs
+Centralized data dependency; incompatible
+with federated edge deployment
+[6]
+Adversarial
+Autoencoder
+DER-integrated unbalanced
+grids
+FDIAs
+Centralized architecture; raw data pooling
+incompatible with edge privacy
+[7]
+Federated LSTM
+Autoencoder
+Substation sensor & IoT data
+Generic anomalies
+No power flow variables; topology-blind; no
+temporal attack evaluation
+[8]
+INTACT
+IEEE 33-Bus radial (P, Q,
+|V |, θ) with solar DERs
+Temporal (Replay)
+Combines federated privacy, topology-aware
+aggregation, DER bidirectional flow
+modeling, and temporal attack resilience.
+Proposed
+affect multiple connected zones simultaneously, a Replay
+attack, which corrupts one zone while leaving its neighbors
+unaffected, is exposed by this spatial mismatch, detecting
+threats that local models alone cannot identify.
+The specific contributions of this paper are as follows;
+• Multi-State
+Cyber-Physical
+Benchmarking:
+The
+simulation
+and
+comparative
+analysis
+of
+a
+passive
+unidirectional baseline grid against an active bidirectional
+DER-integrated
+network,
+quantifying
+how
+dynamic
+power flow degrades the effectiveness of localized
+temporal anomaly detection.
+• Temporal Attack Modeling: The synthetic injection of
+stealthy Replay attacks into a multi-variable IEEE 33-Bus
+dataset with active solar DERs, demonstrating that
+topology-blind models fail to reliably detect temporally
+consistent replay signals under natural DER variability.
+• Topology-Aware Federated Architecture: A federated
+aggregation protocol in which client model contributions
+are
+weighted
+by
+inter-zone
+electrical
+admittance,
+encoding physical coupling directly into the learning
+process,
+augmented
+by
+a
+cross-zone
+reconstruction
+residual
+consistency
+check
+that
+identifies
+stealthy
+replay attacks by their absence of physically expected
+spatial propagation signatures, without centralizing raw
+operational data.
+The remainder of this paper is organized as follows. Section
+II reviews related work on intrusion detection in cyber-physical
+power systems. Section III describes the cyber-physical
+simulation, dataset construction, and replay attack injection
+methodology. Section IV presents the proposed INTACT
+architecture and its topology-aware federated aggregation
+protocol. Section V evaluates the experimental results, and
+Section VI concludes the paper.
+II. RELATED WORK
+Research
+on
+Intrusion
+Detection
+Systems
+(IDS)
+in
+cyber-physical
+power
+systems
+has
+generally
+developed
+in two distinct directions: federated learning approaches
+that prioritize communication privacy and physics-informed
+methods that leverage power flow constraints for anomaly
+detection. This section reviews the most relevant work along
+both areas and identifies the gap that motivates the proposed
+INTACT framework. Table I summarizes these studies, along
+with their key methods and limitations.
+A. Federated Learning for Grid Intrusion Detection
+Most FL approaches established the viability of distributed
+anomaly detection without centralizing the raw operational
+data. Purohit et al. [2] proposed FL-ADS, a federated anomaly
+detection system for DER networks targeting communication
+protocols such as DNP3 and Modbus. While the system
+effectively coordinates distributed clients, it secures the
+communication layer without modeling physical power flow
+variables, remaining blind to the physical coupling structure of
+the underlying network. Kausar et al. [3] developed a federated
+deep learning model using physical measurements for FDIA
+detection in cyber-physical power systems, yet do not isolate
+the vulnerability shift introduced when dynamic solar DERs
+are added to radial grids, leaving the impact of bidirectional
+power flow on detection performance unquantified. Kesici et
+al. [4] addressed data partitioning through vertical federated
+learning on the IEEE 123-bus and IEEE 37-node systems,
+achieving strong FDIA detection using various sub-network
+measurements.
+While
+the
+spatial-temporal
+split
+learning
+architecture represents a step toward physical awareness, the
+work focuses on static network partitioning and does not
+examine how the transition from passive unidirectional grids
+to active DER-integrated networks reshapes the detection
+landscape.
+B. Physics-Informed Anomaly Detection
+Physics-informed
+approaches
+have
+improved
+intrusion
+detection by integrating power system constraints directly into
+learning models. Khaleghi et al. [5] combined control-layer
+
+--- PAGE 3 ---
+Fig. 1: Impact of solar DER integration on the IEEE 33-Bus system. (a) Mean diurnal active power difference at DER buses.
+(b) Voltage magnitude distribution in Zone 2 with and without DER (t = 227.9, p < 0.001).
+grid physics with an LSTM model to improve cyberattack
+detection in virtual synchronous machines. While effective,
+this approach is limited to grid-forming control systems
+and does not generalize well to radial DER distribution
+networks. Jabbari Zideh and Solanki [6] further improved
+physics-aware
+intrusion
+detection
+using
+a
+multivariate
+convolutional autoencoder tested on DER-integrated IEEE
+13-bus and 123-bus systems. Although effective against
+stealthy FDIAs, the model relies on centralized data collection,
+limiting its suitability for privacy-preserving federated edge
+environments.
+C. Unsupervised Methods
+Unsupervised
+learning
+has
+also
+been
+applied
+to
+DER-integrated power systems. Jabbari Zideh et al. [7]
+developed an adversarial autoencoder that effectively models
+DER-driven
+grid
+variability
+in
+unbalanced
+distribution
+networks. However, its centralized architecture requires raw
+data sharing, creating privacy and communication challenges
+that federated systems aim to eliminate. Most closely related
+to the architecture proposed here, Shrestha et al. [8] proposed
+a federated LSTM autoencoder for smart grid anomaly
+detection using substation sensor and IoT data at edge nodes.
+However, their model lacks physical power flow awareness,
+does not incorporate grid topology, and has not been evaluated
+against advanced temporal attacks such as replay.
+D. Research Gap
+Overall, existing research highlights that FL methods
+preserve privacy but lack physical topology awareness, while
+physics-informed approaches capture grid behavior but depend
+on centralized data. No current framework simultaneously
+combines
+federated
+privacy,
+topology
+awareness,
+DER
+bidirectional dynamics, and temporal attack detection within
+radial distribution networks.
+III. GRID SIMULATION AND THREAT MODELING
+A. IEEE 33-Bus Simulation Setup
+The IEEE 33-Bus radial distribution system [16] is used as
+the simulation testbed. This benchmark network consists of a
+single feeder originating from a main feeder/slack bus (Bus 0,
+fixed at 1.0 pu) that supplies 32 load buses through a radial
+topology, making it representative of a neighborhood-level
+distribution network. All simulations are conducted using
+PandaPower [17], an open source power flow simulator.
+To simulate DER integration, three solar photovoltaic units
+were placed at Bus 17 (0.5 MW), Bus 24 (0.4 MW), and
+Bus 32 (0.6 MW) across different network branches. Solar
+generation follows a normal weather-driven profile at 5-minute
+intervals and operates only between 06:00 and 20:00. The
+simulation covers four weeks, generating 8,064 timesteps per
+bus. At each timestep, four key physical variables are recorded:
+Active Power (P), Reactive Power (Q), Voltage Magnitude
+(|V |), and Phase Angle (θ). Two simulation scenarios are
+generated under identical load profiles and weather conditions:
+• No-DER baseline: DER output is set to zero at all
+three injection buses, representing a passive unidirectional
+distribution network.
+• DER-active scenario: All three solar units operate
+normally, introducing bidirectional power flow during
+solar generation hours.
+The grid is divided into four operational zones based on
+electrical proximity and feeder structure, as defined in Table II.
+TABLE II: Zone Partitioning of the IEEE 33-Bus System
+Zone
+Buses
+DER Present
+Zone 1
+1–8
+None
+Zone 2
+9–17
+DER 1 at Bus 17 (0.5 MW)
+Zone 3
+18–24
+DER 2 at Bus 24 (0.4 MW)
+Zone 4
+25–32
+DER 3 at Bus 32 (0.6 MW)
+
+--- PAGE 4 ---
+Fig. 2: Zone-average Pearson correlation of voltage magnitude
+under DER-active conditions. Bus 0 (slack bus) excluded.
+B. Grid Comparison With & Without DER
+To measure the impact of DER integration on the operating
+environment of anomaly detection systems, the two simulation
+scenarios are compared across voltage magnitude and active
+power dimensions. Fig. 1(a) shows the average daily active
+power difference (∆P) at each DER bus, computed as
+the mean difference between the DER-active and No-DER
+scenarios across all 28 simulated days. During the solar
+window, all three DER buses exhibit strongly negative ∆P,
+with peak injections of −0.6 MW (Bus 32), −0.5 MW
+(Bus 17), and −0.4 MW (Bus 24) at approximately 12:00.
+Outside the solar window, ∆P
+=
+0 across all buses,
+confirming that the two scenarios are physically identical at
+night.
+The effect on the voltage distribution is shown in Fig. 1(b).
+The No-DER distribution is narrow and concentrated near the
+lower operational limit (0.95 pu), reflecting the predictable
+voltage droop of a passive radial feeder. The DER-active
+distribution is significantly wider and shifted toward higher
+voltages, spanning from 0.93 pu to 1.00 pu. A Welch’s
+t-test [18] confirms this difference is statistically significant
+(t = 227.9, p < 0.001), with DER integration raising the mean
+system voltage by +0.008 pu and reducing voltage violations
+below 0.95 pu by 68.8% (from 44,552 to 13,920 timesteps
+across the full system). This increased distributional spread
+elevates the baseline reconstruction noise floor for locally
+trained anomaly detectors, creating the operating environment
+in which temporally consistent replay attacks can exploit
+natural variability to evade detection.
+C. Inter-Zone Coupling & Topological Heterogeneity
+To validate the physical motivation for topology-aware
+federated aggregation, Fig. 2 presents the zone-average
+Pearson
+correlation
+of
+voltage
+magnitude
+time
+series
+across
+all
+four
+zones
+under
+DER-active
+conditions.
+Intra-zone
+correlations
+(diagonal)
+consistently
+exceed
+r
+=
+0.99, indicating that buses within the same zone
+respond near-identically to network disturbances. Inter-zone
+correlations (off-diagonal) are lower, particularly involving
+Zone 3 (r = 0.884 with Zone 2, r = 0.911 with Zone 4),
+whose lateral branch topology produces voltage dynamics
+partially decoupled from the main feeder. This spatial
+heterogeneity in coupling strength motivates the use of
+inter-zone electrical admittance as aggregation weights in
+the proposed INTACT framework: zones that are more
+strongly coupled electrically should exert proportionally
+greater influence on each other’s learned representations,
+a relationship that standard FedAvg ignores by treating all
+clients as equally weighted peers.
+D. Stealthy Replay Attack Design
+In a naive replay attack, an attacker substitutes real-time
+measurements with historical data via a hard cut. However, this
+introduces sudden temporal changes that localized time-series
+anomaly detectors, such as LSTM autoencoders, can easily
+identify. To rigorously evaluate the INTACT framework, we
+design a stealthy context-aware replay attack that remains
+consistent with local grid operating conditions while exploiting
+the spatial blind spot of zone-isolated detection.
+Let the cyber-physical state of a zone at time t be the
+complete multi-variable measurement vector:
+y(t) = [P(t), Q(t), |V (t)|, θ(t)]T
+(1)
+All four physical state variables — active power P, reactive
+power Q, voltage magnitude |V |, and phase angle θ —
+are simultaneously replaced at every timestep of the attack
+window. Full multi-variable substitution preserves the internal
+AC power flow consistency of the attacked zone: because all
+four variables are jointly replaced with historically coherent
+values, the local LSTM reconstructs the injected sequence with
+low residual e(t) = ∥y(t)−ˆy(t)∥2 ≤τth, preventing detection
+by the isolated edge node.
+The attack is executed in two steps:
+• Statistical Window Selection: Rather than replaying
+arbitrary historical data, the attacker identifies a past time
+window whose statistical properties — mean and standard
+deviation across all features — closely match the target
+window [19]. For DER-equipped zones (Zones 2–4),
+targets are peak solar generation periods (10:00–14:00);
+for Zone 1 (load-only), targets are evening peak load
+periods (18:00–20:00). Source windows are constrained
+to differ by more than two hours from the target hour and
+to originate at least three days prior, preventing trivial
+same-hour matching in the synthetic dataset.
+• Cross-Fade
+Boundary
+Blending:
+To
+mask
+the
+injection boundary, sensor readings are cross-faded
+over 12 timesteps (60 minutes) at each injection edge,
+smoothly transitioning from real-time to historical values
+and back [20]. Only the unblended middle portion is
+
+--- PAGE 5 ---
+Fig. 3: Design of the stealthy replay attack for Zone 2. (a) Statistical window selection matching historical data to target
+operational ranges. (b) Cross-fade boundary blending to eliminate detectable temporal discontinuities.
+Fig. 4: Cross-zone spatial mismatch during a Zone 2 replay attack. The compromised node (Bus 17) reports replayed DER
+output that is physically inconsistent with the concurrent telemetry of its unaffected neighbor (Bus 18).
+labeled as an attack event. This eliminates the sharp
+temporal discontinuity to which LSTM-based detectors
+are most sensitive [21]. Fig. 3 illustrates the result:
+Panel (a) shows that the source window shares a
+statistically similar operational range to the target, and
+Panel (b) shows the blended injection embedded in
+surrounding normal data with no detectable boundary.
+• Cross-Zone Spatial Inconsistency: While the attack
+remains indistinguishable from a natural weather transient
+when examined locally, full multi-variable replacement
+in one zone necessarily breaks the spatial correlation
+between physically adjacent buses [9]. Fig. 4 illustrates
+this for a Zone 2 attack at 11:00. During the attack
+window, Zone 2 (Bus 17, compromised) reports replayed
+SCADA
+measurements
+consistent
+with
+a
+different
+historical operating period: voltage rises by ∼22 mp.u.
+above its pre-attack mean and active power injection
+drops to −0.40 p.u., characteristic of a high-DER-output
+interval several hours earlier. Meanwhile, Zone 3 (Bus 18,
+directly coupled to Bus 17 through feeder admittance)
+continues tracking the true real-time operating state
+— its voltage remains stable at ∼0.998 p.u. and its
+load remains unchanged at ∼0.055 p.u. If the DER at
+Bus 17 had genuinely shifted output by that magnitude,
+the admittance coupling between the two buses would
+have produced a measurable voltage and power change
+at Bus 18 — yet no such change occurs, exposing
+the data as replayed. This cross-zone divergence is
+invisible to the Zone 2 local model, which has no
+access to Zone 3 measurements, but constitutes a
+detectable admittance mismatch for any model observing
+both zones simultaneously. The INTACT framework
+
+--- PAGE 6 ---
+exploits this property through topology-aware federated
+aggregation, enabling the global model to learn expected
+inter-zone correlations during training and flag deviations
+at inference time even when local reconstruction residuals
+remain below the detection threshold.
+E. Evaluation Dataset and Attack Injection Strategy
+Stealthy replay attacks are injected independently into the
+test data of each zone: three events in Zone 1 and four events
+each in Zones 2–4, with each event spanning a 4-hour window
+(48 timesteps at 5-minute resolution). Each local model is
+evaluated exclusively on its own zone’s attacked test file,
+which contains only the 32–36 bus-level features belonging
+to that zone.
+For centralized and FL model evaluation, a combined test
+dataset is constructed by merging all four zone test files
+column-wise (128 features total). The global attack label is set
+to 1 whenever any zone is under attack, yielding 631 attack
+windows out of 4,002 total (15.8%). This evaluation protocol
+tests whether centralized and FL models can exploit cross-zone
+spatial correlations that are invisible to any single local model,
+providing a direct measure of the benefit conferred by global
+situational awareness.
+IV. ISOLATED AND CENTRALIZED DETECTION BASELINES
+We evaluate two baseline architectures to benchmark our
+INTACT framework. The first is an isolated local LSTM
+Autoencoder. Here, each model trains only on data from its
+own zone. The second is a centralized LSTM Autoencoder.
+This represents the theoretical upper bound with full data
+access. For both setups, the input sequences span T = 30
+consecutive timesteps (2.5 hours). They cover four physical
+state variables per bus: P, Q, |V |, and θ.
+A. Decentralized Local Autoencoder Training
+The local configuration trains one LSTM Autoencoder per
+zone. It uses only that zone’s measurement data. Zones do
+not share any information during training or inference. This
+mimics a scenario where each edge node operates as a
+completely isolated anomaly detector.
+We ensured a mathematically fair baseline by optimizing
+each model independently. We used the Optuna framework
+for this step [22]. This allowed every local model to find
+its optimal architecture, such as hidden units and learning
+rates, tailored to its specific DER variance. Next, we calculated
+independent anomaly detection thresholds (τth) for each zone.
+These were set at a high percentile of the local training
+reconstruction errors, ranging from the 99.1th to the 99.9th
+percentile based on local noise profiles.
+During testing, any reconstruction error above the localized
+τth triggers an alarm. Table III shows how each zone
+performed against the stealthy replay attack.
+Detection performance varies widely across the zones. This
+reflects the diverse operating conditions caused by DER
+integration. Zone 4 hosts the largest DER unit (0.6 MW at
+Bus 32). It achieves the highest recall at 0.94. This happens
+TABLE III: Localized Baseline Detection Performance
+Zone
+Thresh.
+Prec.
+Recall
+F1
+AUC
+Zone 1
+0.0067
+0.44
+0.52
+0.47
+0.848
+Zone 2
+0.0045
+0.44
+0.69
+0.54
+0.903
+Zone 3
+0.0059
+0.74
+0.75
+0.74
+0.923
+Zone 4
+0.0033
+0.68
+0.94
+0.79
+0.985
+Avg
+–
+0.58
+0.73
+0.64
+0.915
+because suppressing a large solar signal creates a very obvious
+statistical drop. In contrast, Zone 2 contains a smaller DER
+(0.5 MW at Bus 17). It only achieves an F1-Score of 0.54.
+The natural voltage swings from the solar panel raise the
+reconstruction noise floor, hiding the attack. Zone 1 has no
+DER at all and performs the worst (F1-Score: 0.47). The attack
+here targets the evening load peak, which easily blends into
+normal demand fluctuations.
+Fig. 5 visualizes the local LSTM performance for Zone 2.
+Panel (a) shows a massive overlap between normal and attack
+reconstruction errors. The attack windows barely push past the
+detection threshold. Panel (b) confirms this timeline. Three out
+of four attacks stay below or just barely cross the threshold
+line. We also see a false positive spike near window 720. This
+reflects a normal operational change such as natural variations
+in solar generation or load demand that the model incorrectly
+classified as an anomaly.. These results confirm a major flaw.
+Even when perfectly tuned, isolated local detectors cannot
+catch stealthy replays hidden inside natural DER variability.
+B. Centralized ML Model Training
+The centralized baseline takes a different approach. It trains
+a single LSTM Autoencoder on the combined raw data from
+all four zones at once. The input space spans 128 features at
+each timestep. This gives the model complete visibility over
+the entire physical system.
+This
+model
+processes
+a
+much
+larger
+feature
+space.
+Therefore, we ran a dedicated Optuna search on the combined
+dataset to find the optimal global architecture. The best setup
+used two stacked LSTM layers (32 and 64 units), no dropout,
+and a learning rate of 5.73 × 10−3. We set the anomaly
+threshold at the 99.4th percentile (τth = 0.0046) of the
+combined training errors. We must ensure a fair comparison
+with the federated models later. Therefore, we locked this
+exact global architecture and threshold percentile for all
+subsequent Federated Learning (FL) experiments.
+This
+centralized
+setup
+represents
+the
+theoretical
+performance
+ceiling.
+It
+assumes
+unrestricted
+server-side
+access to all operational measurements while disregarding
+the
+stringent
+cybersecurity,
+access
+control,
+and
+information-protection requirements imposed in real-world
+grid
+environments.
+In
+practice,
+such
+architectures
+face
+significant deployment barriers due to regulatory standards
+such as NERC CIP-005 and CIP-011, which enforce strict
+Electronic Security Perimeter controls and protection of Bulk
+Electric System (BES) Cyber System Information, thereby
+
+--- PAGE 7 ---
+Fig. 5: Localized LSTM Autoencoder performance on Zone 2.
+limiting unrestricted sharing of raw operational telemetry
+across organizational boundaries [23], [24].
+The centralized model achieved an average F1-Score of
+0.77 and an AUC of 0.928. This easily beat the local average
+F1-Score of 0.64. This 13-point jump proves a critical concept.
+Cross-zone information is vital for catching stealthy attacks.
+When the model sees the entire system at once, it can flag
+localized anomalies that look perfectly normal in isolation.
+However, the centralized model has a drawback. It incurs
+a higher false positive rate (FPR = 0.060) compared to the
+local models (FPR = 0.030). The massive 128-feature input
+captures too much inter-zone noise. This occasionally triggers
+false alarms during normal, grid-wide weather events. This
+exact tradeoff motivates our INTACT framework. We want to
+replicate the high detection rates of central awareness, but keep
+the per-zone data locality to prevent unnecessary false alarms.
+V. PROPOSED TOPOLOGY-AWARE FEDERATED LEARNING
+A. Limitations of Standard Federated Aggregation
+B. Admittance-Weighted Aggregation (INTACT)
+C. Cross-Zone Consistency Verification
+VI. EXPERIMENTAL RESULTS AND DISCUSSION
+A. Global Architecture Comparison
+B. Analysis of Spatial Mismatch Detection
+VII. CONCLUSION
+REFERENCES
+[1] M. Z. Gunduz and R. Das, “Cyber-security on smart grid: Threats and
+potential solutions,” Computer networks, vol. 169, p. 107094, 2020.
+[2] S. Purohit, M. Govindarasu, and B. Blakely, “Fl-ads: Federated learning
+anomaly detection system for distributed energy resource networks,”
+IET Cyber-Physical Systems: Theory & Applications, vol. 10, no. 1,
+p. e70001, 2025.
+[3] F. Kausar, S. Deo, S. Hussain, and Z. Ul Haque, “Federated deep
+learning model for false data injection attack detection in cyber physical
+power systems,” Energies, vol. 17, no. 21, p. 5337, 2024.
+[4] M. Kesici, B. Pal, and G. Yang, “Detection of false data injection attacks
+in distribution networks: A vertical federated learning approach,” IEEE
+Transactions on Smart Grid, vol. 15, no. 6, pp. 5952–5964, 2024.
+[5] A. Khaleghi, S. Oshnoei, and S. Mirzajani, “Federated learning detection
+of cyberattacks on virtual synchronous machines under grid-forming
+control using physics-informed lstm,” Fractal and Fractional, vol. 9,
+no. 9, p. 569, 2025.
+[6] M. J. Zideh and S. K. Solanki, “Multivariate physics-informed
+convolutional autoencoder for anomaly detection in power distribution
+systems with widespread deployment of distributed energy resources,”
+Sustainable Energy, Grids and Networks, p. 102022, 2025.
+[7] M. J. Zideh, M. R. Khalghani, and S. K. Solanki, “An unsupervised
+adversarial autoencoder for cyber attack detection in power distribution
+grids,” Electric Power Systems Research, vol. 232, p. 110407, 2024.
+[8] R. Shrestha, M. Mohammadi, S. Sinaei, A. Salcines, D. Pampliega,
+R. Clemente, A. L. Sanz, E. Nowroozi, and A. Lindgren, “Anomaly
+detection based on lstm and autoencoders using federated learning in
+smart electric grid,” Journal of Parallel and Distributed Computing,
+vol. 193, p. 104951, 2024.
+[9] R. Deng, P. Zhuang, and H. Liang, “Ccpa: Coordinated cyber-physical
+attacks and countermeasures in smart grid,” IEEE Transactions on Smart
+Grid, vol. 8, no. 5, pp. 2420–2430, 2017.
+[10] S. Sourav, P. P. Biswas, B. Chen, and D. Mashima, “Detecting hidden
+attackers in photovoltaic systems using machine learning,” in 2022 IEEE
+International Conference on Communications, Control, and Computing
+Technologies for Smart Grids (SmartGridComm), pp. 360–366, IEEE,
+2022.
+[11] M. H. Karim and P. Ranganathan, “Edge-enabled ai for anomaly
+detection in distributed energy networks: A federated learning approach,”
+in 2024 56th North American Power Symposium (NAPS), pp. 1–7, IEEE,
+2024.
+[12] M. K. Quan, P. N. Pathirana, M. Wijayasundara, S. Setunge, D. C.
+Nguyen, C. G. Brinton, D. J. Love, and H. V. Poor, “Federated
+learning for cyber physical systems: a comprehensive survey,” IEEE
+Communications Surveys & Tutorials, 2025.
+[13] D. Abdullah, “Physics-informed machine learning for real-time stability
+control in renewable-dominant smart grids,” National Journal of
+Renewable Energy Systems and Innovation, pp. 1–9, 2026.
+[14] M. Baran and F. Wu, “Network reconfiguration in distribution systems
+for loss reduction and load balancing,” IEEE Transactions on Power
+Delivery, vol. 4, no. 2, pp. 1401–1407, 1989.
+[15] B. McMahan, E. Moore, D. Ramage, S. Hampson, and B. A. y Arcas,
+“Communication-efficient learning of deep networks from decentralized
+data,” in Artificial intelligence and statistics, pp. 1273–1282, Pmlr, 2017.
+[16] M. E. Baran and F. F. Wu, “Network reconfiguration in distribution
+systems for loss reduction and load balancing,” IEEE Trans. Power Del.,
+vol. 4, no. 2, pp. 1401–1407, 1989.
+[17] L. Thurner, A. Scheidler, F. Sch¨afer, J.-H. Menke, J. Dollichon, F. Meier,
+S. Meinecke, and M. Braun, “pandapower—an open-source python
+tool for convenient modeling, analysis, and optimization of electric
+power systems,” IEEE Transactions on Power Systems, vol. 33, no. 6,
+pp. 6510–6521, 2018.
+[18] B. L. Welch, “The generalization of ‘student’s’problem when several
+
+--- PAGE 8 ---
+TABLE IV: Global Architecture Performance Comparison
+Architecture
+Privacy Preserved
+Topology Aware
+Avg Precision
+Avg Recall
+Avg F1-Score
+AUC
+Local LSTMs
+Yes
+No
+0.58
+0.73
+0.64
+0.915
+Centralized ML
+No
+Yes
+0.72
+0.83
+0.77
+0.928
+FedAvg (20R/3E)
+Yes
+No
+0.64
+0.21
+0.32
+0.831
+FedProx (µ = 0.001)
+Yes
+No
+0.66
+0.20
+0.31
+0.815
+FedProx (µ = 0.01)
+Yes
+No
+0.63
+0.19
+0.29
+0.816
+FedAdam (η = 0.01)
+Yes
+No
+0.61
+0.22
+0.33
+0.811
+INTACT (Proposed)
+Yes
+Yes
+[Insert]
+[Insert]
+[Insert]
+[Insert]
+different population varlances are involved,” Biometrika, vol. 34, no. 1-2,
+pp. 28–35, 1947.
+[19] Y. Shen and Z. Qin, “Detection, differentiation and localization of replay
+attack and false data injection attack based on random matrix,” Scientific
+Reports, vol. 14, no. 1, p. 2758, 2024.
+[20] A. Erba, R. Taormina, S. Galelli, M. Pogliani, M. Carminati, S. Zanero,
+and N. O. Tippenhauer, “Constrained concealment attacks against
+reconstruction-based anomaly detectors in industrial control systems,”
+in Proceedings of the 36th Annual Computer Security Applications
+Conference (ACSAC), pp. 173–185, 2020.
+[21] S. Gao, H. Zhang, Z. Wang, and C. Huang, “Optimal injection attack
+strategy for cyber-physical systems: a dynamic feedback approach,”
+Security and Safety, vol. 1, p. 2022005, 2022.
+[22] T.
+Akiba,
+S.
+Sano,
+T.
+Yanase,
+T.
+Ohta,
+and
+M.
+Koyama,
+“Optuna: A next-generation hyperparameter optimization framework,”
+in Proceedings of the 25th ACM SIGKDD international conference on
+knowledge discovery & data mining, pp. 2623–2631, 2019.
+[23] North American Electric Reliability Corporation (NERC), “Reliability
+standard cip-005-7: Cyber security — electronic security perimeter(s),”
+tech. rep., North American Electric Reliability Corporation, 2024.
+[24] North American Electric Reliability Corporation (NERC), “Reliability
+standard cip-011-3: Cyber security — information protection,” tech. rep.,
+North American Electric Reliability Corporation, 2024.
+
