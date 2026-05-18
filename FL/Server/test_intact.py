@@ -24,7 +24,15 @@ from tensorflow.keras.optimizers import Adam
 WINDOW_SIZE      = 30
 NUM_FEATURES     = 36
 BATCH_SIZE       = 32
-OPTIMAL_PCT      = 99.4
+OPTIMAL_PCT      = 99.4        # fallback / system MAX
+
+# Optuna-selected percentile per zone (from local zone hyperparameter search)
+ZONE_OPTIMAL_PCTS = {
+    'zone1': 99.4,   # local model used 99.4th pct
+    'zone2': 99.1,   # local model used 99.1th pct (more sensitive)
+    'zone3': 99.4,   # local model used 99.4th pct
+    'zone4': 99.9,   # local model used 99.9th pct (more precise)
+}
 
 ZONE_NAMES = ['zone1', 'zone2', 'zone3', 'zone4']
 ZONE_BUSES = {
@@ -198,11 +206,12 @@ def main():
         model = load_weights(model, weights_path)
         zone_models[zid] = model
 
-        # Threshold from training data (fit scaler on train, reuse on test)
+        # Threshold from training data using zone's Optuna-selected percentile
+        zone_pct = ZONE_OPTIMAL_PCTS[zid]
         train_errs, scaler = zone_errors(model, train_feat, zid)
-        threshold = float(np.percentile(train_errs, OPTIMAL_PCT))
+        threshold = float(np.percentile(train_errs, zone_pct))
         zone_thresholds[zid] = threshold
-        print(f"    Threshold ({OPTIMAL_PCT}th pct): {threshold:.6f}", flush=True)
+        print(f"    Threshold ({zone_pct}th pct): {threshold:.6f}", flush=True)
 
         # Test errors (reuse scaler fitted on train)
         test_errs, _ = zone_errors(model, test_feat, zid, scaler=scaler)
@@ -242,7 +251,8 @@ def main():
     print("INTACT — Per-Zone Detection Results", flush=True)
     print("=" * 60, flush=True)
 
-    zone_metrics = {}
+    zone_metrics           = {}
+    zone_train_final_scores = {}   # needed for system-level training threshold
     for zid in ZONE_NAMES:
         scores    = zone_final_scores[zid]
         threshold = zone_thresholds[zid]
@@ -251,7 +261,6 @@ def main():
         local_train_errs, _ = zone_errors(zone_models[zid], train_feat, zid)
         neighbour_train_avg  = np.zeros_like(local_train_errs)
         for other, w in W[zid].items():
-            other_train, _ = zone_errors(zone_models[other], train_feat, zid)
             # Use local proxy: other zone's errors on their own columns
             other_cols  = get_zone_columns(list(train_feat.columns), other)
             other_data  = train_feat[other_cols].values.astype(np.float32)
@@ -264,7 +273,8 @@ def main():
 
         train_local, _ = zone_errors(zone_models[zid], train_feat, zid)
         train_scores   = train_local + gamma * (train_local - neighbour_train_avg)
-        adj_threshold  = float(np.percentile(train_scores, OPTIMAL_PCT))
+        zone_train_final_scores[zid] = train_scores          # save for system threshold
+        adj_threshold  = float(np.percentile(train_scores, ZONE_OPTIMAL_PCTS[zid]))
 
         preds = (scores > adj_threshold).astype(int)
         prec, rec, f1, support = precision_recall_fscore_support(
@@ -278,17 +288,29 @@ def main():
         print(f"  {zid}  Prec={prec[1]:.3f}  Rec={rec[1]:.3f}  F1={f1[1]:.3f}  "
               f"AUC={auc:.4f}  FPR={fpr:.4f}", flush=True)
 
-    # ── System average ─────────────────────────────────────────────────────────
-    avg_prec = np.mean([m['prec'] for m in zone_metrics.values()])
-    avg_rec  = np.mean([m['rec']  for m in zone_metrics.values()])
-    avg_f1   = np.mean([m['f1']   for m in zone_metrics.values()])
-    avg_auc  = np.mean([m['auc']  for m in zone_metrics.values()])
-    avg_fpr  = np.mean([m['fpr']  for m in zone_metrics.values()])
+    # ── System-level evaluation (MAX aggregation across zones) ───────────────
+    # system_score[t] = MAX(zone_final_scores[t]) picks the most-alarmed zone.
+    # Zone 1's inverted scores are naturally filtered out (never the MAX during attacks).
+    # Threshold calibrated on training MAX distribution — captures cross-zone dynamics.
+    system_scores = np.max([zone_final_scores[z] for z in ZONE_NAMES], axis=0)
+    train_system_scores = np.max([zone_train_final_scores[z] for z in ZONE_NAMES], axis=0)
+    sys_threshold = float(np.percentile(train_system_scores, OPTIMAL_PCT))
+    sys_preds = (system_scores > sys_threshold).astype(int)
+    sys_prec, sys_rec, sys_f1, _ = precision_recall_fscore_support(
+        window_labels, sys_preds, labels=[0, 1], zero_division=0
+    )
+    sys_auc = float(roc_auc_score(window_labels, system_scores))
+    sys_fpr = float(np.sum((sys_preds == 1) & (window_labels == 0)) / np.sum(window_labels == 0))
 
     print()
-    print(f"  SYSTEM AVG  Prec={avg_prec:.3f}  Rec={avg_rec:.3f}  F1={avg_f1:.3f}  "
-          f"AUC={avg_auc:.4f}  FPR={avg_fpr:.4f}", flush=True)
+    print(f"  SYSTEM (MAX)  Prec={sys_prec[1]:.3f}  Rec={sys_rec[1]:.3f}  "
+          f"F1={sys_f1[1]:.3f}  AUC={sys_auc:.4f}  FPR={sys_fpr:.4f}", flush=True)
     print("=" * 60, flush=True)
+
+    # Save system scores, predictions, and threshold for compare_models.py
+    np.save(os.path.join(RESULTS_DIR, 'intact_system_scores.npy'), system_scores)
+    np.save(os.path.join(RESULTS_DIR, 'intact_system_preds.npy'), sys_preds)
+    np.save(os.path.join(RESULTS_DIR, 'intact_system_threshold.npy'), np.array(sys_threshold))
 
     # Save summary
     summary_lines = [
@@ -298,17 +320,21 @@ def main():
         f"Local epochs : {local_epochs}",
         f"Alpha        : {alpha}",
         f"Gamma        : {gamma}",
+        f"Threshold    : {OPTIMAL_PCT}th pct of training MAX scores",
         "=" * 60,
+        "Per-zone metrics (each zone evaluated independently):",
     ]
     for zid, m in zone_metrics.items():
+        pct = ZONE_OPTIMAL_PCTS[zid]
         summary_lines.append(
-            f"  {zid}  Prec={m['prec']:.3f}  Rec={m['rec']:.3f}  "
+            f"  {zid} [{pct:.1f}th pct]  Prec={m['prec']:.3f}  Rec={m['rec']:.3f}  "
             f"F1={m['f1']:.3f}  AUC={m['auc']:.4f}  FPR={m['fpr']:.4f}"
         )
     summary_lines += [
         "-" * 60,
-        f"  SYSTEM AVG  Prec={avg_prec:.3f}  Rec={avg_rec:.3f}  "
-        f"F1={avg_f1:.3f}  AUC={avg_auc:.4f}  FPR={avg_fpr:.4f}",
+        "System-level metrics (MAX aggregation across zones):",
+        f"  SYSTEM  Prec={sys_prec[1]:.3f}  Rec={sys_rec[1]:.3f}  "
+        f"F1={sys_f1[1]:.3f}  AUC={sys_auc:.4f}  FPR={sys_fpr:.4f}",
         "=" * 60,
     ]
     with open(os.path.join(RESULTS_DIR, 'intact_final_summary.txt'), 'w') as fh:
@@ -322,12 +348,9 @@ def main():
         ax.plot(fpr_v, tpr_v, color=color, lw=1.4, ls='--',
                 label=f'{zid}  (AUC={m["auc"]:.4f})')
 
-    # System-level score: average of all 4 final scores
-    system_scores = np.mean([zone_final_scores[z] for z in ZONE_NAMES], axis=0)
     fpr_v, tpr_v, _ = roc_curve(window_labels, system_scores)
-    sys_auc = roc_auc_score(window_labels, system_scores)
     ax.plot(fpr_v, tpr_v, color='#2c7bb6', lw=2.5, ls='-',
-            label=f'INTACT System  (AUC={sys_auc:.4f})')
+            label=f'INTACT System MAX  (AUC={sys_auc:.4f})')
     ax.plot([0, 1], [0, 1], 'k--', lw=0.8, label='Random')
 
     ax.set_xlabel('False Positive Rate', fontsize=12)

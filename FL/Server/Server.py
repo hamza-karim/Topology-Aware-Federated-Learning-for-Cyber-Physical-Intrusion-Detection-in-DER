@@ -279,8 +279,10 @@ def main():
         prefix = 'fedavg'
     elif cfg['strategy'] == 'fedprox':
         prefix = f"fedprox_{cfg['proximal_mu']}"
-    else:
+    elif cfg['strategy'] == 'fedadam':
         prefix = f"fedadam_{cfg['server_eta']}"
+    else:
+        prefix = 'intact'
 
     def fit_config(server_round: int) -> Dict[str, Scalar]:
         return {

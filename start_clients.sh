@@ -84,7 +84,7 @@ else
     # ── Strategy reminder ─────────────────────────────────────────
     echo ""
     while true; do
-        read -rp "  Strategy you configured on the server [fedavg/fedprox/fedadam]: " STRATEGY
+        read -rp "  Strategy you configured on the server [fedavg/fedprox/fedadam/intact]: " STRATEGY
         STRATEGY="${STRATEGY:-fedavg}"
         STRATEGY="${STRATEGY,,}"
         if [[ "$STRATEGY" == "fedavg" || "$STRATEGY" == "fedprox" || "$STRATEGY" == "fedadam" || "$STRATEGY" == "intact" ]]; then

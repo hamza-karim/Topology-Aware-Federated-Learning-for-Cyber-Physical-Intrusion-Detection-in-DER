@@ -26,13 +26,15 @@ from sklearn.metrics import (
 import tensorflow as tf
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-SCRIPT_DIR     = os.path.dirname(os.path.abspath(__file__))
-ML_MODELS_DIR  = os.path.join(SCRIPT_DIR, "ML model", "models")
-FL_RESULTS_DIR = os.path.join(SCRIPT_DIR, "ML model", "results", "fl")
-TEST_CSV       = os.path.join(SCRIPT_DIR, "FL", "Server", "centralized_test_combined.csv")
-OUT_DIR        = os.path.join(SCRIPT_DIR, "ML model", "results", "comparison")
+SCRIPT_DIR      = os.path.dirname(os.path.abspath(__file__))
+ML_MODELS_DIR   = os.path.join(SCRIPT_DIR, "ML model", "models")
+FL_RESULTS_DIR  = os.path.join(SCRIPT_DIR, "ML model", "results", "fl")
+LOCAL_CACHE_DIR = os.path.join(SCRIPT_DIR, "ML model", "results", "local")
+TEST_CSV        = os.path.join(SCRIPT_DIR, "FL", "Server", "centralized_test_combined.csv")
+OUT_DIR         = os.path.join(SCRIPT_DIR, "ML model", "results", "comparison")
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(FL_RESULTS_DIR, exist_ok=True)
+os.makedirs(LOCAL_CACHE_DIR, exist_ok=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────
 WINDOW_SIZE  = 30
@@ -117,9 +119,13 @@ def mse_errors(model, windows):
     return np.mean(np.mean(np.square(windows - pred), axis=2), axis=1)
 
 
-def compute_metrics(errors, labels):
-    thr = float(np.percentile(errors[labels == 0], OPTIMAL_PCT))
-    preds = (errors > thr).astype(int)
+def compute_metrics(errors, labels, threshold=None, preds=None):
+    # Pre-computed predictions (e.g. OR logic) bypass threshold — AUC still uses errors
+    if preds is None:
+        thr = threshold if threshold is not None else float(np.percentile(errors[labels == 0], OPTIMAL_PCT))
+        preds = (errors > thr).astype(int)
+    else:
+        thr = threshold  # may be None; recorded for info only
     prec, rec, f1, support = precision_recall_fscore_support(
         labels, preds, labels=[0, 1], zero_division=0
     )
@@ -157,8 +163,39 @@ def load_test_data():
 
 
 # ── Inference helpers ──────────────────────────────────────────────────────
+def _load_keras_compat(path):
+    """Load a Keras model, patching Dense quantization_config version mismatch."""
+    try:
+        return tf.keras.models.load_model(path)
+    except Exception:
+        orig = tf.keras.layers.Dense.from_config
+
+        @classmethod
+        def _patched(cls, config):
+            config.pop('quantization_config', None)
+            return orig.__func__(cls, config)
+
+        tf.keras.layers.Dense.from_config = _patched
+        try:
+            model = tf.keras.models.load_model(path)
+        finally:
+            tf.keras.layers.Dense.from_config = orig
+        return model
+
+
+def _get_local_threshold(name):
+    """Load pre-saved training-calibrated threshold for a local/centralized model."""
+    thr_path = os.path.join(ML_MODELS_DIR, f'{name}_threshold.npy')
+    return float(np.load(thr_path)) if os.path.exists(thr_path) else None
+
+
 def get_centralized_errors(feature_df):
-    model  = tf.keras.models.load_model(os.path.join(ML_MODELS_DIR, 'centralized_lstm.keras'))
+    # Use pre-saved errors when available (avoids Keras/sklearn version mismatches)
+    cache = os.path.join(LOCAL_CACHE_DIR, 'centralized_errors.npy')
+    if os.path.exists(cache):
+        print('  [cache] centralized_errors.npy')
+        return np.load(cache)
+    model  = _load_keras_compat(os.path.join(ML_MODELS_DIR, 'centralized_lstm.keras'))
     scaler = joblib.load(os.path.join(ML_MODELS_DIR, 'centralized_scaler.pkl'))
     data    = scaler.transform(feature_df.values.astype(np.float32))
     windows = create_windows(data)
@@ -166,7 +203,12 @@ def get_centralized_errors(feature_df):
 
 
 def get_local_zone_errors(feature_df, zone_id):
-    model  = tf.keras.models.load_model(
+    # Use pre-saved errors when available
+    cache = os.path.join(LOCAL_CACHE_DIR, f'{zone_id}_local_errors.npy')
+    if os.path.exists(cache):
+        print(f'  [cache] {zone_id}_local_errors.npy')
+        return np.load(cache)
+    model  = _load_keras_compat(
         os.path.join(ML_MODELS_DIR, f'{zone_id}_local_lstm.keras')
     )
     scaler    = joblib.load(os.path.join(ML_MODELS_DIR, f'{zone_id}_scaler.pkl'))
@@ -179,32 +221,38 @@ def get_local_zone_errors(feature_df, zone_id):
 def get_fl_errors(prefix):
     errors_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_errors.npy')
     labels_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_labels.npy')
+    thr_path    = os.path.join(FL_RESULTS_DIR, f'{prefix}_threshold.npy')
     if not os.path.exists(errors_path):
         print(f"  [SKIP] {prefix} errors not found - run fetch_fl_results.sh")
-        return None, None
-    return np.load(errors_path), np.load(labels_path)
+        return None, None, None
+    thr = float(np.load(thr_path)) if os.path.exists(thr_path) else None
+    return np.load(errors_path), np.load(labels_path), thr
 
 
 def get_intact_system_errors():
-    """Load INTACT per-zone consistency scores and return system-average + labels.
-
-    test_intact.py saves intact_{zid}_final_scores.npy and intact_window_labels.npy
-    to ~/fl/results on the server, which fetch_fl_results.sh pulls to FL_RESULTS_DIR.
-    System score = mean of the 4 per-zone consistency-adjusted scores.
-    """
-    zone_names  = ['zone1', 'zone2', 'zone3', 'zone4']
+    """Load INTACT system-level scores, labels, and training-calibrated threshold."""
     labels_path = os.path.join(FL_RESULTS_DIR, 'intact_window_labels.npy')
     if not os.path.exists(labels_path):
         print(f'  [SKIP] FL INTACT — intact_window_labels.npy not found in {FL_RESULTS_DIR}')
-        return None, None
+        return None, None, None, None
+
+    sys_path = os.path.join(FL_RESULTS_DIR, 'intact_system_scores.npy')
+    thr_path = os.path.join(FL_RESULTS_DIR, 'intact_system_threshold.npy')
+    thr = float(np.load(thr_path)) if os.path.exists(thr_path) else None
+
+    if os.path.exists(sys_path):
+        return np.load(sys_path), np.load(labels_path), thr, None
+
+    # Fallback: rebuild MAX from per-zone files
+    zone_names = ['zone1', 'zone2', 'zone3', 'zone4']
     zone_scores = []
     for zid in zone_names:
         score_path = os.path.join(FL_RESULTS_DIR, f'intact_{zid}_final_scores.npy')
         if not os.path.exists(score_path):
             print(f'  [SKIP] FL INTACT — intact_{zid}_final_scores.npy not found')
-            return None, None
+            return None, None, None, None
         zone_scores.append(np.load(score_path))
-    return np.mean(zone_scores, axis=0), np.load(labels_path)
+    return np.max(zone_scores, axis=0), np.load(labels_path), thr, None
 
 
 # ── Figure 1: ROC curves ───────────────────────────────────────────────────
@@ -261,7 +309,9 @@ def fig_pr(all_errors, all_labels, window_labels):
 
 
 # ── Figure 3: Bar chart comparison ────────────────────────────────────────
-def fig_bar(all_errors, all_labels, window_labels):
+def fig_bar(all_errors, all_labels, window_labels, all_thresholds=None, all_preds=None):
+    all_thresholds = all_thresholds or {}
+    all_preds      = all_preds      or {}
     metrics_list = []
     names_used = []
     for name in MODEL_ORDER:
@@ -269,7 +319,9 @@ def fig_bar(all_errors, all_labels, window_labels):
         if errors is None:
             continue
         labels = all_labels.get(name, window_labels)
-        m = compute_metrics(errors, labels)
+        m = compute_metrics(errors, labels,
+                            threshold=all_thresholds.get(name),
+                            preds=all_preds.get(name))
         metrics_list.append(m)
         names_used.append(name)
 
@@ -476,14 +528,19 @@ def main():
     n_attack = int((window_labels == 1).sum())
     print(f'  {len(window_labels)} windows | Normal: {n_normal} | Attack: {n_attack}')
 
-    all_errors = {}
-    all_labels = {}
+    all_errors     = {}
+    all_labels     = {}
+    all_thresholds = {}
+    all_preds      = {}
 
     print('\nRunning inference - Centralized model...')
     try:
         all_errors['Centralized'] = get_centralized_errors(feature_df)
-        m = compute_metrics(all_errors['Centralized'], window_labels)
-        print(f'  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+        thr = _get_local_threshold('centralized')
+        all_thresholds['Centralized'] = thr
+        m = compute_metrics(all_errors['Centralized'], window_labels, threshold=thr)
+        thr_src = 'train-cal' if thr is not None else 'test-normal'
+        print(f'  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}  (thr={thr_src})')
     except Exception as e:
         print(f'  [SKIP] {e}')
         all_errors['Centralized'] = None
@@ -496,8 +553,11 @@ def main():
         print(f'\nRunning inference - {zone_name}...')
         try:
             all_errors[zone_name] = get_local_zone_errors(feature_df, zone_id)
-            m = compute_metrics(all_errors[zone_name], window_labels)
-            print(f'  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+            thr = _get_local_threshold(zone_id)
+            all_thresholds[zone_name] = thr
+            m = compute_metrics(all_errors[zone_name], window_labels, threshold=thr)
+            thr_src = 'train-cal' if thr is not None else 'test-normal'
+            print(f'  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}  (thr={thr_src})')
         except Exception as e:
             print(f'  [SKIP] {e}')
             all_errors[zone_name] = None
@@ -512,28 +572,36 @@ def main():
 
     print('\nLoading FL errors...')
     for prefix, label in fl_variants:
-        errors, labels = get_fl_errors(prefix)
+        errors, labels, thr = get_fl_errors(prefix)
         all_errors[label] = errors
         if labels is not None:
             all_labels[label] = labels
-            m = compute_metrics(errors, labels)
-            print(f'  [{label}]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+            all_thresholds[label] = thr
+            m = compute_metrics(errors, labels, threshold=thr)
+            thr_src = 'train-cal' if thr is not None else 'test-normal'
+            print(f'  [{label}]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}  (thr={thr_src})')
 
     print('\nLoading INTACT system errors...')
-    intact_errors, intact_labels = get_intact_system_errors()
+    intact_errors, intact_labels, intact_thr, intact_preds = get_intact_system_errors()
     if intact_errors is not None:
         all_errors['FL INTACT'] = intact_errors
         all_labels['FL INTACT'] = intact_labels
+        all_thresholds['FL INTACT'] = intact_thr
+        if intact_preds is not None:
+            all_preds['FL INTACT'] = intact_preds
         MODEL_ORDER.append('FL INTACT')
-        m = compute_metrics(intact_errors, intact_labels)
-        print(f'  [FL INTACT]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}')
+        m = compute_metrics(intact_errors, intact_labels,
+                            threshold=intact_thr, preds=intact_preds)
+        thr_src = 'OR-logic (Optuna pct)' if intact_preds is not None else \
+                  ('train-cal' if intact_thr is not None else 'test-normal')
+        print(f'  [FL INTACT]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}  (thr={thr_src})')
     else:
         all_errors['FL INTACT'] = None
 
     print(f'\nGenerating figures -> {OUT_DIR}')
     fig_roc(all_errors, all_labels, window_labels)
     fig_pr(all_errors, all_labels, window_labels)
-    fig_bar(all_errors, all_labels, window_labels)
+    fig_bar(all_errors, all_labels, window_labels, all_thresholds, all_preds)
     fig_sweep(all_errors, all_labels, window_labels)
     fig_distributions(all_errors, all_labels, window_labels)
     fig_convergence()
