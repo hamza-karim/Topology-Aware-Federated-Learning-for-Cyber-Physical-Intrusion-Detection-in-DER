@@ -21,3 +21,4 @@ ML model/results/**/*.pdf
 # One-off analysis scripts
 rebuild_test_csv.py
 reeval_centralized.py
+IDS.pdf
