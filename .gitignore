@@ -22,3 +22,4 @@ ML model/results/**/*.pdf
 rebuild_test_csv.py
 reeval_centralized.py
 IDS.pdf
+IDS DATASET/fig2_correlation.pdf
