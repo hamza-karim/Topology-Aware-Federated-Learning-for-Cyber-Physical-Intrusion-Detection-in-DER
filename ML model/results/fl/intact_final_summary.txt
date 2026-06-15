@@ -4,14 +4,14 @@ FL rounds    : 20
 Local epochs : 3
 Alpha        : 0.9
 Gamma        : 0.3
-Threshold    : 99.4th pct of training MAX scores
+Threshold    : 99.6th pct of training MAX scores
 ============================================================
 Per-zone metrics (each zone evaluated independently):
-  zone1 [99.4th pct]  Prec=0.432  Rec=0.127  F1=0.196  AUC=0.3813  FPR=0.0311
-  zone2 [99.1th pct]  Prec=0.587  Rec=0.290  F1=0.388  AUC=0.5416  FPR=0.0383
-  zone3 [99.4th pct]  Prec=0.740  Rec=0.208  F1=0.324  AUC=0.5115  FPR=0.0136
-  zone4 [99.9th pct]  Prec=0.825  Rec=0.336  F1=0.477  AUC=0.5067  FPR=0.0133
+  zone1 [99.4th pct]  Prec=0.000  Rec=0.000  F1=0.000  AUC=0.1491  FPR=0.0269
+  zone2 [99.1th pct]  Prec=0.673  Rec=0.375  F1=0.482  AUC=0.6580  FPR=0.0244
+  zone3 [99.4th pct]  Prec=0.665  Rec=0.261  F1=0.374  AUC=0.6942  FPR=0.0176
+  zone4 [99.9th pct]  Prec=0.848  Rec=0.426  F1=0.567  AUC=0.6384  FPR=0.0102
 ------------------------------------------------------------
 System-level metrics (MAX aggregation across zones):
-  SYSTEM  Prec=0.680  Rec=0.691  F1=0.686  AUC=0.8296  FPR=0.0608
+  SYSTEM  Prec=0.664  Rec=0.811  F1=0.730  AUC=0.9301  FPR=0.0549
 ============================================================

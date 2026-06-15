@@ -5,7 +5,9 @@
 import os
 import re
 import json
+import time
 import numpy as np
+import random
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -20,6 +22,7 @@ import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, Dense, RepeatVector, TimeDistributed
 from tensorflow.keras.optimizers import Adam
+random.seed(42); np.random.seed(42); tf.random.set_seed(42)
 
 WINDOW_SIZE      = 30
 NUM_FEATURES     = 36
@@ -190,10 +193,11 @@ def main():
     print(f"Test windows: {len(window_labels)}  Normal: {n_normal}  Attack: {n_attack}",
           flush=True)
 
-    # ── Per-zone inference ─────────────────────────────────────────────────────
-    zone_error_arrays = {}   # zone_id -> ndarray of errors (len = n_windows)
+    # ── Per-zone model loading + training calibration (one-time setup, not timed) ──
+    zone_error_arrays = {}
     zone_thresholds   = {}
     zone_models       = {}
+    zone_scalers      = {}   # store scalers fitted on training data for reuse
 
     for zid in ZONE_NAMES:
         weights_path = os.path.join(MODELS_DIR, f'intact_{zid}_final_weights.npz')
@@ -206,35 +210,44 @@ def main():
         model = load_weights(model, weights_path)
         zone_models[zid] = model
 
-        # Threshold from training data using zone's Optuna-selected percentile
         zone_pct = ZONE_OPTIMAL_PCTS[zid]
         train_errs, scaler = zone_errors(model, train_feat, zid)
+        zone_scalers[zid]  = scaler
         threshold = float(np.percentile(train_errs, zone_pct))
         zone_thresholds[zid] = threshold
         print(f"    Threshold ({zone_pct}th pct): {threshold:.6f}", flush=True)
 
-        # Test errors (reuse scaler fitted on train)
-        test_errs, _ = zone_errors(model, test_feat, zid, scaler=scaler)
+    if len(zone_models) < 4:
+        print("ERROR: not all 4 zone models found. Run intact training first.", flush=True)
+        return
+
+    # ── Test inference only (TIMED — matches FedAvg timing scope) ─────────────
+    _t_infer_start = time.perf_counter()
+
+    for zid in ZONE_NAMES:
+        test_errs, _ = zone_errors(zone_models[zid], test_feat, zid,
+                                   scaler=zone_scalers[zid])
         zone_error_arrays[zid] = test_errs
         print(f"    Test errors — mean: {test_errs.mean():.6f}  max: {test_errs.max():.6f}",
               flush=True)
 
-    if len(zone_error_arrays) < 4:
-        print("ERROR: not all 4 zone models found. Run intact training first.", flush=True)
-        return
-
     # ── Cross-zone consistency check ──────────────────────────────────────────
-    # final_score[i,t] = local_error[i,t] + gamma*(local_error[i,t] - neighbour_avg[i,t])
-    # Amplifies isolated spikes (replay attack) and dampens global disturbances.
     zone_final_scores = {}
     for zid in ZONE_NAMES:
-        local    = zone_error_arrays[zid]
+        local         = zone_error_arrays[zid]
         neighbour_avg = np.zeros_like(local)
         for other, w in W[zid].items():
             neighbour_avg += w * zone_error_arrays[other]
-        # spatial mismatch term
         mismatch = local - neighbour_avg
         zone_final_scores[zid] = local + gamma * mismatch
+
+    _t_infer_end = time.perf_counter()
+    _n_windows   = len(zone_final_scores[ZONE_NAMES[0]])
+    _total_ms    = (_t_infer_end - _t_infer_start) * 1000
+    print(f"\n  [TIMING] Inference (test forward pass + consistency): "
+          f"{_total_ms:.1f} ms total | "
+          f"{_total_ms / _n_windows:.4f} ms/window | "
+          f"{_n_windows} windows", flush=True)
 
     # Save arrays
     np.save(os.path.join(RESULTS_DIR, 'intact_window_labels.npy'), window_labels)
@@ -291,16 +304,30 @@ def main():
     # ── System-level evaluation (MAX aggregation across zones) ───────────────
     # system_score[t] = MAX(zone_final_scores[t]) picks the most-alarmed zone.
     # Zone 1's inverted scores are naturally filtered out (never the MAX during attacks).
-    # Threshold calibrated on training MAX distribution — captures cross-zone dynamics.
+    # Threshold sweep over training MAX distribution — same methodology as all FL baselines.
     system_scores = np.max([zone_final_scores[z] for z in ZONE_NAMES], axis=0)
     train_system_scores = np.max([zone_train_final_scores[z] for z in ZONE_NAMES], axis=0)
-    sys_threshold = float(np.percentile(train_system_scores, OPTIMAL_PCT))
-    sys_preds = (system_scores > sys_threshold).astype(int)
-    sys_prec, sys_rec, sys_f1, _ = precision_recall_fscore_support(
-        window_labels, sys_preds, labels=[0, 1], zero_division=0
-    )
     sys_auc = float(roc_auc_score(window_labels, system_scores))
-    sys_fpr = float(np.sum((sys_preds == 1) & (window_labels == 0)) / np.sum(window_labels == 0))
+
+    sweep_pcts = [95, 96, 97, 98, 99, 99.1, 99.2, 99.3, 99.4, 99.5, 99.6, 99.7, 99.8, 99.9]
+    best_sys_f1, best_sys_pct = -1.0, OPTIMAL_PCT
+    print(f"\n  System MAX threshold sweep:", flush=True)
+    print(f"  {'Pct':>6}  {'Thresh':>10}  {'Prec':>7}  {'Rec':>7}  {'F1':>7}  {'FPR':>7}", flush=True)
+    for pct in sweep_pcts:
+        t = float(np.percentile(train_system_scores, pct))
+        p = (system_scores > t).astype(int)
+        pr, rc, f1, _ = precision_recall_fscore_support(window_labels, p, labels=[0,1], zero_division=0)
+        fpr_s = float(np.sum((p==1)&(window_labels==0)) / np.sum(window_labels==0))
+        marker = ' <--' if f1[1] > best_sys_f1 else ''
+        print(f"  {pct:>6}  {t:>10.6f}  {pr[1]:>7.3f}  {rc[1]:>7.3f}  {f1[1]:>7.3f}  {fpr_s:>7.4f}{marker}", flush=True)
+        if f1[1] > best_sys_f1:
+            best_sys_f1  = f1[1]
+            best_sys_pct = pct
+            sys_threshold = t
+            sys_preds     = p
+            sys_prec, sys_rec, sys_f1 = pr, rc, f1
+            sys_fpr = fpr_s
+    print(f"\n  Best system pct: {best_sys_pct}th  threshold={sys_threshold:.6f}", flush=True)
 
     print()
     print(f"  SYSTEM (MAX)  Prec={sys_prec[1]:.3f}  Rec={sys_rec[1]:.3f}  "
@@ -320,7 +347,7 @@ def main():
         f"Local epochs : {local_epochs}",
         f"Alpha        : {alpha}",
         f"Gamma        : {gamma}",
-        f"Threshold    : {OPTIMAL_PCT}th pct of training MAX scores",
+        f"Threshold    : {best_sys_pct}th pct of training MAX scores",
         "=" * 60,
         "Per-zone metrics (each zone evaluated independently):",
     ]

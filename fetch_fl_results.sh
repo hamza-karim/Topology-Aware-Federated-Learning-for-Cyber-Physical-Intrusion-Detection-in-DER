@@ -49,6 +49,7 @@ scp -o BatchMode=yes -o ConnectTimeout=10 \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/fedprox_*" \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/fedadam_*" \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/intact_*" \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_RESULTS}/ditto_*" \
     "$LOCAL_DIR/" 2>/dev/null
 echo -e "${GREEN}  [OK] results copied (missing files skipped)${NC}"
 
@@ -69,6 +70,9 @@ scp -o BatchMode=yes -o ConnectTimeout=10 \
 scp -o BatchMode=yes -o ConnectTimeout=10 \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/intact_training_log.csv" \
     "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/intact_run_config.json" \
+    "$LOCAL_DIR/" 2>/dev/null
+scp -o BatchMode=yes -o ConnectTimeout=10 \
+    "${SERVER_USER}@${SERVER_IP}:${REMOTE_MODELS}/ditto_*_run_config.json" \
     "$LOCAL_DIR/" 2>/dev/null
 echo -e "${GREEN}  [OK] logs + configs copied (missing files skipped)${NC}"
 

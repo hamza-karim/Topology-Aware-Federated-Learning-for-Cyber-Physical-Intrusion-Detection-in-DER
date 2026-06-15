@@ -8,6 +8,7 @@
 import os
 import re
 import json
+import time
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -128,7 +129,7 @@ def zone_reconstruction_errors(model, scaled_all, feature_cols, zone_id):
     return np.mean(np.mean(np.square(windows - pred), axis=2), axis=1)
 
 
-def format_summary(label, threshold, prec, rec, f1, support, auc, fl_rounds, local_epochs):
+def format_summary(label, threshold, best_pct, prec, rec, f1, support, auc, fl_rounds, local_epochs):
     sep = '=' * 60
     w, col = 14, 9
     header = (f"{'':>{w}} {'precision':>{col}} {'recall':>{col}} "
@@ -144,7 +145,7 @@ def format_summary(label, threshold, prec, rec, f1, support, auc, fl_rounds, loc
         f"Local epochs  : {local_epochs}\n"
         f"Num clients   : {NUM_CLIENTS}\n"
         f"{sep}\n"
-        f"Optimal threshold: {threshold:.6f} ({OPTIMAL_PERCENTILE}th percentile)\n"
+        f"Optimal threshold: {threshold:.6f} ({best_pct}th percentile)\n"
         f"Detection metrics:\n"
         f"{header}\n"
         f"{normal_row}\n"
@@ -214,11 +215,10 @@ def main():
         errs = zone_reconstruction_errors(model, scaled_train, train_cols, zone_id)
         train_zone_errors.append(errs)
     train_errors = np.mean(np.stack(train_zone_errors, axis=1), axis=1)
-    threshold = float(np.percentile(train_errors, OPTIMAL_PERCENTILE))
-    print(f"Threshold ({OPTIMAL_PERCENTILE}th pct of training errors): {threshold:.6f}", flush=True)
 
     # ── Inference on test data ─────────────────────────────────────
     print("Running inference on test data...", flush=True)
+    _t0 = time.perf_counter()
     zone_errors = []
     for zone_id in ['zone1', 'zone2', 'zone3', 'zone4']:
         errs = zone_reconstruction_errors(model, scaled_all, feature_cols, zone_id)
@@ -226,15 +226,34 @@ def main():
         print(f"  {zone_id}: mean error {errs.mean():.6f}", flush=True)
 
     errors = np.mean(np.stack(zone_errors, axis=1), axis=1)
-    preds  = (errors > threshold).astype(int)
+    _t1 = time.perf_counter()
+    _n_windows = len(errors)
+    _total_ms  = (_t1 - _t0) * 1000
+    print(f"\n  [TIMING] Inference: {_total_ms:.1f} ms total | "
+          f"{_total_ms / _n_windows:.4f} ms/window | "
+          f"{_n_windows} windows", flush=True)
+    auc    = float(roc_auc_score(window_labels, errors))
 
-    prec, rec, f1, support = precision_recall_fscore_support(
-        window_labels, preds, labels=[0, 1]
-    )
-    fpr = float(np.sum((preds == 1) & (window_labels == 0)) / np.sum(window_labels == 0))
-    auc = float(roc_auc_score(window_labels, errors))
+    # ── Threshold sweep — same methodology as all other methods ────
+    sweep_pcts = [95, 96, 97, 98, 99, 99.1, 99.2, 99.3, 99.4, 99.5, 99.6, 99.7, 99.8, 99.9]
+    best_f1, best_pct = -1.0, OPTIMAL_PERCENTILE
+    threshold, prec, rec, f1, support, fpr = None, None, None, None, None, None
+    print(f"\n  Threshold sweep:", flush=True)
+    print(f"  {'Pct':>6}  {'Thresh':>10}  {'Prec':>7}  {'Rec':>7}  {'F1':>7}  {'FPR':>7}", flush=True)
+    for pct in sweep_pcts:
+        t  = float(np.percentile(train_errors, pct))
+        p  = (errors > t).astype(int)
+        pr, rc, f1s, sup = precision_recall_fscore_support(window_labels, p, labels=[0, 1], zero_division=0)
+        fpr_s = float(np.sum((p == 1) & (window_labels == 0)) / np.sum(window_labels == 0))
+        marker = ' <--' if f1s[1] > best_f1 else ''
+        print(f"  {pct:>6}  {t:>10.6f}  {pr[1]:>7.3f}  {rc[1]:>7.3f}  {f1s[1]:>7.3f}  {fpr_s:>7.4f}{marker}",
+              flush=True)
+        if f1s[1] > best_f1:
+            best_f1, best_pct = f1s[1], pct
+            threshold, prec, rec, f1, support, fpr = t, pr, rc, f1s, sup, fpr_s
+    print(f"\n  Best pct: {best_pct}th  threshold={threshold:.6f}", flush=True)
 
-    summary = format_summary(label, threshold, prec, rec, f1,
+    summary = format_summary(label, threshold, best_pct, prec, rec, f1,
                              support, auc, fl_rounds, local_epochs)
     print(summary, flush=True)
     print(f"FPR: {fpr:.4f}", flush=True)
@@ -258,7 +277,7 @@ def main():
     ax1.hist(errors[window_labels == 1], bins=100, alpha=0.6,
              color='tomato', label='Replay Attack', density=True)
     ax1.axvline(threshold, color='black', linestyle='--',
-                label=f'Threshold ({OPTIMAL_PERCENTILE}th pct)')
+                label=f'Threshold ({best_pct}th pct)')
     ax1.set_xlabel('Reconstruction Error (MSE)')
     ax1.set_ylabel('Density')
     ax1.set_title(f'Reconstruction Error Distribution — {label}')

@@ -30,7 +30,7 @@ SCRIPT_DIR      = os.path.dirname(os.path.abspath(__file__))
 ML_MODELS_DIR   = os.path.join(SCRIPT_DIR, "ML model", "models")
 FL_RESULTS_DIR  = os.path.join(SCRIPT_DIR, "ML model", "results", "fl")
 LOCAL_CACHE_DIR = os.path.join(SCRIPT_DIR, "ML model", "results", "local")
-TEST_CSV        = os.path.join(SCRIPT_DIR, "FL", "Server", "centralized_test_combined.csv")
+TEST_CSV        = os.path.join(SCRIPT_DIR, "IDS DATASET", "FL_DATA", "centralized_test_combined.csv")
 OUT_DIR         = os.path.join(SCRIPT_DIR, "ML model", "results", "comparison")
 os.makedirs(OUT_DIR, exist_ok=True)
 os.makedirs(FL_RESULTS_DIR, exist_ok=True)
@@ -77,6 +77,9 @@ def prefix_to_label(prefix):
     if prefix.startswith('fedadam_'):
         eta = prefix.replace('fedadam_', '')
         return f'FL FedAdam (eta={eta})'
+    if prefix.startswith('ditto_lambda'):
+        lam = prefix.replace('ditto_lambda', '')
+        return f'FL Ditto (λ={lam})'
     return prefix.upper()
 
 
@@ -90,6 +93,8 @@ def discover_fl_results():
             continue  # skip per-zone error files
         if fname.startswith('intact_'):
             continue  # INTACT handled separately via get_intact_system_errors()
+        if fname.startswith('ditto_'):
+            continue  # Ditto handled separately via get_ditto_system_errors()
         prefix = fname.replace('_errors.npy', '')
         found.append((prefix, prefix_to_label(prefix)))
     found.sort(key=lambda x: (0 if x[0] == 'fedavg' else 1, x[0]))
@@ -229,6 +234,35 @@ def get_fl_errors(prefix):
     return np.load(errors_path), np.load(labels_path), thr
 
 
+def discover_ditto_results():
+    """Return list of (prefix, label) for all Ditto lambda variants in FL_RESULTS_DIR."""
+    import glob
+    found = []
+    for path in sorted(glob.glob(
+            os.path.join(FL_RESULTS_DIR, 'ditto_lambda*_system_scores.npy'))):
+        fname  = os.path.basename(path)
+        prefix = fname.replace('_system_scores.npy', '')
+        found.append((prefix, prefix_to_label(prefix)))
+    return found
+
+
+def get_ditto_system_errors(prefix):
+    """Load Ditto per-zone MAX system scores for a given lambda prefix."""
+    labels_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_window_labels.npy')
+    if not os.path.exists(labels_path):
+        print(f'  [SKIP] {prefix} — {prefix}_window_labels.npy not found in {FL_RESULTS_DIR}')
+        return None, None, None
+
+    sys_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_system_scores.npy')
+    thr_path = os.path.join(FL_RESULTS_DIR, f'{prefix}_system_threshold.npy')
+    if not os.path.exists(sys_path):
+        print(f'  [SKIP] {prefix} — {prefix}_system_scores.npy not found')
+        return None, None, None
+
+    thr = float(np.load(thr_path)) if os.path.exists(thr_path) else None
+    return np.load(sys_path), np.load(labels_path), thr
+
+
 def get_intact_system_errors():
     """Load INTACT system-level scores, labels, and training-calibrated threshold."""
     labels_path = os.path.join(FL_RESULTS_DIR, 'intact_window_labels.npy')
@@ -255,24 +289,38 @@ def get_intact_system_errors():
     return np.max(zone_scores, axis=0), np.load(labels_path), thr, None
 
 
-# ── Figure 1: ROC curves ───────────────────────────────────────────────────
+# ── Figure 1: ROC curves (FL methods only) ────────────────────────────────
 def fig_roc(all_errors, all_labels, window_labels):
-    fig, ax = plt.subplots(figsize=(8, 7))
+    # Line styles and widths: INTACT stands out, others are dashed
+    style_map = {
+        'FL INTACT':             ('-',  2.8, '#1a9641'),
+        'FL FedAvg':             ('--', 1.8, '#d7191c'),
+        'FL FedProx (mu=0.01)':  ('-.', 1.8, '#ff7f00'),
+        'FL FedProx (mu=0.001)': (':',  1.8, '#984ea3'),
+        'FL FedAdam (eta=0.01)': ('--', 1.8, '#a65628'),
+        'FL Ditto (λ=0.1)':      (':',  1.8, '#e41a1c'),
+        'FL Ditto (λ=0.5)':      (':',  1.8, '#377eb8'),
+        'FL Ditto (λ=1.0)':      (':',  1.8, '#ff7f00'),
+    }
+
+    fig, ax = plt.subplots(figsize=(7, 6))
     for name in MODEL_ORDER:
+        if not name.startswith('FL'):
+            continue                        # skip centralized and local zone models
         errors = all_errors.get(name)
         if errors is None:
             continue
         labels = all_labels.get(name, window_labels)
         fpr_v, tpr_v, _ = roc_curve(labels, errors)
         auc = roc_auc_score(labels, errors)
-        lw = 2.5 if (name == 'Centralized' or name.startswith('FL')) else 1.2
-        ls = '-'  if (name == 'Centralized' or name.startswith('FL')) else '--'
-        ax.plot(fpr_v, tpr_v, color=COLORS.get(name, '#888888'), linewidth=lw,
-                linestyle=ls, label=f'{name}  (AUC={auc:.4f})')
-    ax.plot([0, 1], [0, 1], 'k--', linewidth=0.8, label='Random')
+        ls, lw, color = style_map.get(name, ('--', 1.5, COLORS.get(name, '#888888')))
+        ax.plot(fpr_v, tpr_v, color=color, linewidth=lw, linestyle=ls,
+                label=f'{name}  (AUC={auc:.4f})')
+
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=0.8, alpha=0.5, label='Random')
     ax.set_xlabel('False Positive Rate', fontsize=12)
     ax.set_ylabel('True Positive Rate', fontsize=12)
-    ax.set_title('ROC Curves - All Model Variants', fontsize=13)
+    ax.set_title('ROC Curves — Federated Learning Methods', fontsize=13)
     ax.legend(loc='lower right', fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -597,6 +645,21 @@ def main():
         print(f'  [FL INTACT]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}  (thr={thr_src})')
     else:
         all_errors['FL INTACT'] = None
+
+    ditto_variants = discover_ditto_results()
+    if ditto_variants:
+        print('\nLoading Ditto system errors...')
+    for di, (prefix, label) in enumerate(ditto_variants):
+        COLORS[label] = FL_COLORS[(len(fl_variants) + di) % len(FL_COLORS)]
+        d_errors, d_labels, d_thr = get_ditto_system_errors(prefix)
+        all_errors[label] = d_errors
+        if d_errors is not None:
+            all_labels[label]     = d_labels
+            all_thresholds[label] = d_thr
+            MODEL_ORDER.append(label)
+            m = compute_metrics(d_errors, d_labels, threshold=d_thr)
+            thr_src = 'train-cal' if d_thr is not None else 'test-normal'
+            print(f'  [{label}]  AUC={m["auc"]:.4f}  F1={m["f1"]:.4f}  Recall={m["recall"]:.4f}  (thr={thr_src})')
 
     print(f'\nGenerating figures -> {OUT_DIR}')
     fig_roc(all_errors, all_labels, window_labels)

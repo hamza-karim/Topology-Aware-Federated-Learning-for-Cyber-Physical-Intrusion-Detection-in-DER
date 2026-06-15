@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Draft text files
+ids_*.txt
+draft_text.txt
+
+# Figure generation scripts
+gen_fig*.py
+gen_roc_paper.py
+gen_intact_framework_fig.py
+gen_admittance_fig.py
+
+# Figure PDFs (IDS.pdf is the paper and is not matched by fig_*.pdf)
+fig_*.pdf
+ML model/results/**/*.pdf
+
+# One-off analysis scripts
+rebuild_test_csv.py
+reeval_centralized.py

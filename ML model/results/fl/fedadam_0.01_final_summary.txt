@@ -4,10 +4,10 @@ FL rounds     : 20
 Local epochs  : 3
 Num clients   : 4
 ============================================================
-Optimal threshold: 0.026329 (99.4th percentile)
+Optimal threshold: 0.024029 (95th percentile)
 Detection metrics:
                precision    recall  f1-score   support
-        Normal      0.87      0.97      0.92      3372
- Replay Attack      0.61      0.22      0.33       631
-AUC-ROC  : 0.8114
+        Normal      0.95      0.91      0.93      3531
+ Replay Attack      0.51      0.66      0.58       472
+AUC-ROC  : 0.8918
 ============================================================

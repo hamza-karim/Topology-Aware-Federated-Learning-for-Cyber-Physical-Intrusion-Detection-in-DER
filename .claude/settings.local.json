@@ -5,7 +5,12 @@
       "Bash(docker build *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(Find \"C:\\\\Users\\\\muhammad.karim\\\\Desktop\\\\project\\\\Topology-Aware-Federated-Learning-for-Cyber-Physical-Intrusion-Detection-in-DER\\\\FL\" -type f -name \"*.py\")",
+      "Bash(python gen_fig1_der_voltage.py)",
+      "Bash(python gen_admittance_fig.py)",
+      "Bash(python gen_intact_framework_fig.py)",
+      "Bash(python -c \"import fitz; print\\('fitz ok'\\)\")"
     ]
   }
 }

@@ -1,0 +1,16 @@
+============================================================
+FINAL RESULTS — Ditto (Personalised FL, lambda=0.1)
+Global model  : FedAvg (20 rounds x 3 local epochs)
+Personalise   : 60 epochs per zone
+Lambda        : 0.1
+Threshold     : 95th pct of training MAX scores
+============================================================
+Per-zone metrics (each zone evaluated independently):
+  zone1 [99.4th pct]  Prec=0.193  Rec=0.044  F1=0.072  AUC=0.8254  FPR=0.0249
+  zone2 [99.1th pct]  Prec=0.567  Rec=0.144  F1=0.230  AUC=0.9196  FPR=0.0147
+  zone3 [99.4th pct]  Prec=0.776  Rec=0.110  F1=0.193  AUC=0.8222  FPR=0.0042
+  zone4 [99.9th pct]  Prec=0.809  Rec=0.189  F1=0.306  AUC=0.6340  FPR=0.0059
+------------------------------------------------------------
+System-level metrics (MAX aggregation across zones):
+  SYSTEM  Prec=0.655  Rec=0.439  F1=0.525  AUC=0.9196  FPR=0.0309
+============================================================

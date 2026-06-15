@@ -25,6 +25,10 @@ ZONE_BUSES = {
 }
 ADMITTANCE_PATH = os.path.join(os.path.dirname(__file__), 'data', 'zone_admittance.csv')
 
+# Zones that host DER resources — server knows this from grid topology
+DER_ZONES     = {'zone2', 'zone3', 'zone4'}   # zone1 has no DER (buses 1-8)
+NON_DER_SCALE = 0.0    # non-DER zone 1 excluded from DER zone aggregations; DER zones share only with each other
+
 
 def load_admittance_matrix(csv_path=ADMITTANCE_PATH):
     """Read zone_admittance.csv and return row-normalised inter-zone weight dict.
@@ -46,6 +50,23 @@ def load_admittance_matrix(csv_path=ADMITTANCE_PATH):
         total = sum(raw[z][z2] for z2 in ZONE_NAMES if z2 != z)
         W[z]  = {z2: raw[z][z2] / total for z2 in ZONE_NAMES if z2 != z}
     return W
+
+
+def compute_der_aware_weights(W, der_zones=DER_ZONES, non_der_scale=NON_DER_SCALE):
+    """Re-weight W for model aggregation: non-DER neighbours get a small fraction
+    of their admittance-based weight, then rows are renormalised to sum to 1.
+
+    This keeps the physical topology intact for inference (test_intact.py uses
+    the original W) while reducing the FL influence of non-DER zones during
+    model mixing.
+    """
+    W_der = {}
+    for zi in W:
+        scaled = {zj: w * (1.0 if zj in der_zones else non_der_scale)
+                  for zj, w in W[zi].items()}
+        total  = sum(scaled.values())
+        W_der[zi] = {zj: v / total for zj, v in scaled.items()} if total > 0 else scaled
+    return W_der
 
 
 def prompt(question, default=None, cast=str):
@@ -182,20 +203,26 @@ def make_save_strategy(base_cls):
 class IntactStrategy(fl.server.strategy.FedAvg):
     """Admittance-weighted personalised federated aggregation (INTACT).
 
-    Each zone receives a model that is a convex combination of its own
-    trained weights and its electrically-coupled neighbours' weights:
-        theta_i_new = alpha * theta_i + (1-alpha) * sum_j( W[i,j] * theta_j )
+    Aggregation uses DER-aware weights (W_der) so non-DER zones contribute
+    minimally to DER zone models.  Each zone also has its own alpha:
+        theta_i_new = alpha_i * theta_i + (1-alpha_i) * sum_j( W_der[i,j] * theta_j )
+
+    The original admittance W is saved to run_config for test_intact.py (inference
+    consistency check uses physical topology, not the DER-aware variant).
     """
 
-    def __init__(self, model_dir, local_epochs, alpha, gamma, W, **kwargs):
+    def __init__(self, model_dir, local_epochs, alpha, gamma, W, W_der,
+                 zone_alpha, **kwargs):
         super().__init__(**kwargs)
         self.model_dir    = model_dir
         self.local_epochs = local_epochs
-        self.alpha        = alpha   # self-retention weight
-        self.gamma        = gamma   # consistency penalty weight (saved for test_intact.py)
-        self.W            = W       # {zone_id: {other_zone: normalised_weight}}
-        self.zone_weights = {}      # zone_id -> List[ndarray]  (personalised, current round)
-        self.cid_to_zone  = {}      # client cid -> zone_id
+        self.alpha        = alpha        # DER zone self-retention (for config saving)
+        self.gamma        = gamma
+        self.W            = W            # original admittance weights (inference use)
+        self.W_der        = W_der        # DER-aware aggregation weights
+        self.zone_alpha   = zone_alpha   # {zone_id: alpha_i}
+        self.zone_weights = {}
+        self.cid_to_zone  = {}
         self.round_losses = []
 
     # ── Round start: send each zone its own personalised model ────────────────
@@ -232,11 +259,13 @@ class IntactStrategy(fl.server.strategy.FedAvg):
             zone_raw[zid]  = parameters_to_ndarrays(fit_res.parameters)
             zone_loss[zid] = float(fit_res.metrics.get('loss', 0.0))
 
-        # Admittance mixing: theta_i_new = alpha*theta_i + (1-alpha)*sum_j(W[i,j]*theta_j)
+        # DER-aware mixing: theta_i_new = alpha_i*theta_i + (1-alpha_i)*sum_j(W_der[i,j]*theta_j)
+        # W_der down-weights non-DER neighbours; zone_alpha is per-zone.
         new_weights = {}
         for zid, own in zone_raw.items():
+            a_i = self.zone_alpha.get(zid, self.alpha)
             neighbour_mix = None
-            for other_zone, w in self.W.get(zid, {}).items():
+            for other_zone, w in self.W_der.get(zid, {}).items():
                 if other_zone not in zone_raw:
                     continue
                 scaled = [w * layer for layer in zone_raw[other_zone]]
@@ -247,7 +276,7 @@ class IntactStrategy(fl.server.strategy.FedAvg):
                 new_weights[zid] = own
             else:
                 new_weights[zid] = [
-                    self.alpha * o + (1.0 - self.alpha) * m
+                    a_i * o + (1.0 - a_i) * m
                     for o, m in zip(own, neighbour_mix)
                 ]
 
@@ -302,16 +331,37 @@ def main():
 
     if cfg['strategy'] == 'intact':
         print("Loading admittance matrix...", flush=True)
-        W = load_admittance_matrix()
+        W     = load_admittance_matrix()
+        W_der = compute_der_aware_weights(W)
+
+        # Zone-specific alpha: non-DER zone 1 stays more local
+        der_alpha      = cfg['alpha']
+        non_der_alpha  = min(der_alpha + 0.15, 0.99)
+        zone_alpha     = {z: (der_alpha if z in DER_ZONES else non_der_alpha)
+                          for z in ZONE_NAMES}
+
+        print("  Admittance weights (physical, used at inference):", flush=True)
         for z, neighbours in W.items():
-            print(f"  {z}: " + ", ".join(f"{n}={v:.3f}" for n, v in neighbours.items()),
+            print(f"    {z}: " + ", ".join(f"{n}={v:.3f}" for n, v in neighbours.items()),
                   flush=True)
+        print("  DER-aware aggregation weights (non-DER scaled by "
+              f"{NON_DER_SCALE}):", flush=True)
+        for z, neighbours in W_der.items():
+            print(f"    {z}: " + ", ".join(f"{n}={v:.3f}" for n, v in neighbours.items()),
+                  flush=True)
+        print("  Zone alpha:", flush=True)
+        for z, a in zone_alpha.items():
+            der_tag = "(DER)" if z in DER_ZONES else "(non-DER)"
+            print(f"    {z} {der_tag}: alpha={a}", flush=True)
+
         strategy = IntactStrategy(
             model_dir=cfg['model_dir'],
             local_epochs=cfg['local_epochs'],
             alpha=cfg['alpha'],
             gamma=cfg['gamma'],
             W=W,
+            W_der=W_der,
+            zone_alpha=zone_alpha,
             **common_kwargs,
         )
     elif cfg['strategy'] == 'fedadam':
@@ -355,17 +405,21 @@ def main():
         print(f"Training log saved to {log_path}", flush=True)
 
         run_cfg_path = os.path.join(cfg['model_dir'], f'{prefix}_run_config.json')
+        run_cfg = {
+            'strategy':     cfg['strategy'],
+            'fl_rounds':    cfg['rounds'],
+            'local_epochs': cfg['local_epochs'],
+            'num_clients':  cfg['min_clients'],
+            'proximal_mu':  cfg['proximal_mu'],
+            'server_eta':   cfg['server_eta'],
+            'alpha':        cfg['alpha'],
+            'gamma':        cfg['gamma'],
+        }
+        if cfg['strategy'] == 'intact':
+            run_cfg['non_der_scale'] = NON_DER_SCALE
+            run_cfg['zone_alpha']    = zone_alpha
         with open(run_cfg_path, 'w') as f:
-            json.dump({
-                'strategy':     cfg['strategy'],
-                'fl_rounds':    cfg['rounds'],
-                'local_epochs': cfg['local_epochs'],
-                'num_clients':  cfg['min_clients'],
-                'proximal_mu':  cfg['proximal_mu'],
-                'server_eta':   cfg['server_eta'],
-                'alpha':        cfg['alpha'],
-                'gamma':        cfg['gamma'],
-            }, f, indent=2)
+            json.dump(run_cfg, f, indent=2)
         print(f"Run config saved to {run_cfg_path}", flush=True)
 
 
