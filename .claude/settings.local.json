@@ -10,7 +10,8 @@
       "Bash(python gen_fig1_der_voltage.py)",
       "Bash(python gen_admittance_fig.py)",
       "Bash(python gen_intact_framework_fig.py)",
-      "Bash(python -c \"import fitz; print\\('fitz ok'\\)\")"
+      "Bash(python -c \"import fitz; print\\('fitz ok'\\)\")",
+      "Bash(pdftotext -layout IDS.pdf IDS.txt)"
     ]
   }
 }

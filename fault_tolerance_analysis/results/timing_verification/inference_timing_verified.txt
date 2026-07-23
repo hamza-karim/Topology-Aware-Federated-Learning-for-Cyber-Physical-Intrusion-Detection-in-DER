@@ -1,0 +1,58 @@
+Verified inference timing, freshly re-measured on the AGX Xavier
+(container 6e3ce8d1335d), captured 2026-07-07, in response to a Table V /
+prose inconsistency found during final pre-submission review
+(Table V said 11.62s for Fed-INTACT; prose in Section VI-A and the
+Conclusion said 11.12s -- neither could be verified from any saved file,
+since test_intact.py / test_server.py only print [TIMING] to stdout and
+never write it to a results file. This file exists specifically to make
+sure that does not happen again.)
+
+Command 1: cd /app/src && python3 test_intact.py
+Full console output included the following line:
+  [TIMING] Inference (test forward pass + consistency): 11436.4 ms total | 2.8570 ms/window | 4003 windows
+Detection metrics reproduced exactly: Prec=0.664 Rec=0.811 F1=0.730 AUC=0.9301 FPR=0.0549
+  (threshold=0.005887, 99.6th percentile) -- matches Table V's Fed-INTACT row exactly.
+==> Fed-INTACT inference time = 11436.4 ms = 11.44 s
+
+Command 2: cd /app/src && PREFIX=fedavg python3 test_server.py
+Full console output included the following line:
+  [TIMING] Inference: 11559.9 ms total | 2.8878 ms/window | 4003 windows
+Detection metrics reproduced exactly: Prec=0.55 Rec=0.49 F1=0.52 AUC=0.9147 FPR=0.0544
+  (threshold=0.024798, 96th percentile) -- matches Table V's FedAvg row exactly.
+==> FedAvg inference time = 11559.9 ms = 11.56 s
+
+Command 3: PREFIX=fedprox_0.001 python3 test_server.py
+  [TIMING] Inference: 11251.1 ms total | 2.8107 ms/window | 4003 windows
+Detection metrics reproduced exactly: Prec=0.508 Rec=0.477 F1=0.492 AUC=0.9087 FPR=0.0617
+==> FedProx inference time = 11251.1 ms = 11.25 s
+
+Command 4: PREFIX=fedadam_0.01 python3 test_server.py
+  [TIMING] Inference: 11538.8 ms total | 2.8825 ms/window | 4003 windows
+Detection metrics reproduced exactly: Prec=0.509 Rec=0.663 F1=0.576 AUC=0.8918 FPR=0.0855
+==> FedAdam inference time = 11538.8 ms = 11.54 s
+
+Command 5: DITTO_LAMBDA=0.1 python3 test_ditto.py
+  [TIMING] Inference (test forward pass, no topology term): 11119.4 ms total | 2.7778 ms/window | 4003 windows
+Detection metrics reproduced exactly: Prec=0.655 Rec=0.439 F1=0.525 AUC=0.9196 FPR=0.0309
+==> Ditto (lambda=0.1) inference time = 11119.4 ms = 11.12 s
+  (Note: Ditto's timing excludes the topology/consistency term since Ditto
+  has no cross-zone mechanism -- this is the correct, like-for-like scope
+  for what Ditto actually computes at inference time.)
+
+CONCLUSION: All five methods' inference times now fall in a tight band
+(11.12s - 11.56s), fully supporting the paper's claim that Fed-INTACT's
+topology-awareness and cross-zone consistency check add no measurable
+overhead. This replaces every old, unverifiable timing number in the paper
+with fresh, reproducible measurements, and every accompanying detection
+metric (precision/recall/F1/AUC/FPR) was independently re-confirmed to
+match Table V exactly during the same reruns.
+
+USE THESE NUMBERS GOING FORWARD (replace the "Inference Time (s)" column
+in Table V entirely):
+  Centralized LSTM:  -- (not timed; centralized upper bound, not FL)
+  Local LSTMs Avg:   -- (not timed; not FL)
+  FedAvg:            11.56 s
+  FedProx (mu=0.001):11.25 s
+  FedAdam (eta=0.01):11.54 s
+  Ditto (lambda=0.1):11.12 s
+  Fed-INTACT:        11.44 s

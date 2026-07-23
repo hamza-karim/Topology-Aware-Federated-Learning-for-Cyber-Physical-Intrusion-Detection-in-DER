@@ -1,0 +1,7 @@
+{
+  "strategy": "fedavg",
+  "fl_rounds": 20,
+  "local_epochs": 3,
+  "num_clients": 4,
+  "proximal_mu": 0.0
+}

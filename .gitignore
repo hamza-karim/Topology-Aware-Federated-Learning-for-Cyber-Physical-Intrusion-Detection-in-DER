@@ -23,3 +23,10 @@ rebuild_test_csv.py
 reeval_centralized.py
 IDS.pdf
 IDS DATASET/fig2_correlation.pdf
+
+# Intermediate FL round checkpoints (only final weights are tracked, matching
+# the convention used for ML model/models/*.keras)
+fault_tolerance_analysis/data/intact_weights/**/*round_*_weights.npz
+
+# Unrelated scratch project, not part of this repo
+saleem/

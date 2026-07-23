@@ -1,0 +1,26 @@
+{
+  "strategy": "ditto",
+  "ditto_lambda": 1.0,
+  "personalize_epochs": 60,
+  "global_model": "fedavg_final_weights.npz",
+  "fl_rounds": 20,
+  "local_epochs": 3,
+  "zone_results": {
+    "zone1": {
+      "ditto_loss": 0.010173596441745758,
+      "mse_loss": 0.009011542424559593
+    },
+    "zone2": {
+      "ditto_loss": 0.02924928069114685,
+      "mse_loss": 0.027370749041438103
+    },
+    "zone3": {
+      "ditto_loss": 0.0280452910810709,
+      "mse_loss": 0.02616995759308338
+    },
+    "zone4": {
+      "ditto_loss": 0.01252785511314869,
+      "mse_loss": 0.011245745234191418
+    }
+  }
+}
